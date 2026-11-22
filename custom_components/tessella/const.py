@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "tessella"
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 STORAGE_KEY = "tessella.dashboards"
 STORAGE_VERSION = 1

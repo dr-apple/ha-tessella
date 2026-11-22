@@ -91,7 +91,9 @@
     ".tile.light { padding: 0; touch-action: none; }",
     ".tile.light .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--primary-color, #03a9f4); opacity: .85; pointer-events: none; }",
     ".tile.light .lbl { position: relative; padding: 12px; height: 100%; pointer-events: none; }",
-    ".tile.light .pct { font-size: 1.6rem; font-weight: 700; margin-top: 30px; }",
+    ".tile.light .pct { font-size: 1.6rem; font-weight: 700; margin-top: 20px; }",
+    ".tile.light .lbl { position: relative; padding: 12px; height: 100%; }",
+    ".tile.light .lslider { position: relative; width: 100%; margin-top: 10px; height: 34px; pointer-events: auto; }",
     ".tile.camera { padding: 0; }",
     ".tile.camera img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }",
     ".tile.camera .cam-lbl { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px; background: rgba(0,0,0,.45); color: #fff; font-size: .85rem; }",
@@ -768,12 +770,11 @@
     var bar = h("div", { "class": "bar" });
     var labelHead = headOf("");
     var pct = h("div", { "class": "pct" });
-    el.appendChild(bar);
-    el.appendChild(h("div", { "class": "lbl" }, labelHead, pct));
-    var drag = null;
-    var startPct = 0;
-    var lastSent = 0;
+    var slider = h("input", { type: "range", min: "0", max: "100", step: "1", "class": "lslider" });
+    var busyUntil = 0;
+    var lastSend = 0;
     var lastOn = 100;
+    var sendTimer = null;
 
     var curPct = function (st) {
       if (!st || st.state !== "on") return 0;
@@ -783,57 +784,58 @@
     var setBar = function (p) {
       bar.style.height = p + "%";
       pct.textContent = p + " %";
+      slider.value = p;
     };
-    var canDim = function (st) {
-      return !!st && st.attributes.brightness != null;
+    var send = function (p) {
+      if (!tile.entity) return;
+      if (p <= 0) self.call("light", "turn_off", { entity_id: tile.entity });
+      else self.call("light", "turn_on", { entity_id: tile.entity, brightness_pct: p });
     };
 
-    onPtr(el, "pointerdown", function (e) {
-      if (isEdit() || !tile.entity) return;
-      var st = stateOf(self.hass);
-      try {
-        if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
-      } catch (err) { /* Zeiger nicht aktiv */ }
-      startPct = curPct(st);
-      drag = { id: e.pointerId, y0: e.clientY, t0: Date.now(), moved: false, pct: startPct, h: el.clientHeight || 1, canDim: canDim(st) };
-    });
-    onPtr(el, "pointermove", function (e) {
-      if (!drag || drag.id !== e.pointerId || !drag.canDim) return;
-      var dy = drag.y0 - e.clientY;
-      if (!drag.moved && Math.abs(dy) < 8) return;
-      if (!drag.moved) setClass(el, "dragging", true);
-      drag.moved = true;
-      var p = clamp(Math.round(startPct + (dy / drag.h) * 100), 1, 100);
-      drag.pct = p;
+    // Während des Ziehens und kurz danach keine Werte aus Home Assistant übernehmen
+    slider.addEventListener("input", function () {
+      if (isEdit()) return;
+      var p = Number(slider.value);
       setBar(p);
+      busyUntil = Date.now() + 1500;
       var now = Date.now();
-      if (now - lastSent > 150) {
-        lastSent = now;
-        self.call("light", "turn_on", { entity_id: tile.entity, brightness_pct: p });
+      if (now - lastSend > 200) {
+        lastSend = now;
+        send(p);
+      } else {
+        clearTimeout(sendTimer);
+        sendTimer = setTimeout(function () {
+          lastSend = Date.now();
+          send(Number(slider.value));
+        }, 220);
+      }
+      if (p > 0) lastOn = p;
+    });
+    slider.addEventListener("change", function () {
+      if (isEdit()) return;
+      clearTimeout(sendTimer);
+      var p = Number(slider.value);
+      if (p > 0) lastOn = p;
+      busyUntil = Date.now() + 1500;
+      send(p);
+    });
+
+    // Tipp auf die Kachel (nicht auf den Regler): an oder aus
+    el.addEventListener("click", function (e) {
+      if (isEdit() || !tile.entity) return;
+      if (e.target === slider) return;
+      haptic();
+      var st = stateOf(self.hass);
+      if (st && st.state === "on") {
+        lastOn = curPct(st) || lastOn;
+        self.call("light", "turn_off", { entity_id: tile.entity });
+      } else {
+        self.call("light", "turn_on", st && st.attributes && st.attributes.brightness != null ? { entity_id: tile.entity, brightness_pct: lastOn } : { entity_id: tile.entity });
       }
     });
-    var end = function (e, cancelled) {
-      if (!drag || drag.id !== e.pointerId) return;
-      var d = drag;
-      drag = null;
-      setClass(el, "dragging", false);
-      if (cancelled || !tile.entity) return;
-      var st = stateOf(self.hass);
-      if (d.moved && d.canDim) {
-        lastOn = d.pct;
-        self.call("light", "turn_on", { entity_id: tile.entity, brightness_pct: d.pct });
-      } else if (!d.moved && Date.now() - d.t0 < 450) {
-        haptic();
-        if (st && st.state === "on") {
-          lastOn = curPct(st) || lastOn;
-          self.call("light", "turn_off", { entity_id: tile.entity });
-        } else {
-          self.call("light", "turn_on", d.canDim ? { entity_id: tile.entity, brightness_pct: lastOn } : { entity_id: tile.entity });
-        }
-      }
-    };
-    onPtr(el, "pointerup", function (e) { end(e, false); });
-    onPtr(el, "pointercancel", function (e) { end(e, true); });
+
+    el.appendChild(bar);
+    el.appendChild(h("div", { "class": "lbl" }, labelHead, pct, slider));
 
     return {
       el: el,
@@ -842,7 +844,8 @@
         replaceKids(labelHead, icon(tile.icon || DEFAULT_ICON.light), h("span", null, nameOf(st)));
         setClass(el, "on", !!st && st.state === "on");
         setClass(el, "unavail", !st || st.state === "unavailable");
-        if (!drag || !drag.moved) {
+        slider.disabled = isEdit() || !st || st.attributes.brightness == null && st.state !== "on";
+        if (Date.now() > busyUntil) {
           var p = curPct(st);
           setBar(p);
           if (st && st.state === "on") lastOn = p || lastOn;
