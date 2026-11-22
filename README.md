@@ -82,13 +82,16 @@ Aufbau:
 
 ## Browser-Kompatibilität
 
+Der Kern läuft auf allen Geräten gleich (`tessella-panel.js`, ES5). Das HA-Panel nutzt ihn als Custom Element, die eigenständige Seite direkt. Auf älteren Geräten gibt es also keine abgespeckte Version, sondern denselben Kern.
+
 Tessella soll auch auf älteren iPads und Safari-Versionen laufen (ab iOS 12). Deshalb im Frontend beachten:
 
-- Keine Optional-Chaining-Syntax (`?.`) und keinen Nullish-Operator (`??`) schreiben, sonst lädt das Panel auf alten Browsern gar nicht.
-- Keine neuen DOM-APIs ohne Fallback. Stattdessen die Helfer `replaceKids`, `onPtr` und `mqListen` in `tessella-panel.js` nutzen.
+- Nur ES5 schreiben: kein `let`/`const`, keine Pfeilfunktionen, kein `async`/`await`, keine Spread-Syntax, kein `?.` und `??`. Sonst lädt das Panel auf alten Browsern gar nicht.
+- Kein CSS-Grid und kein `replaceChildren`. Die Kacheln werden in JavaScript positioniert.
+- Keine neuen DOM-APIs ohne Fallback. Stattdessen die Helfer `replaceKids`, `onPtr` und `mqListen` nutzen.
 - Pointer-Ereignisse laufen auf älteren Geräten über Touch-Ereignisse (`onPtr`).
 
-Bekannte Einschränkungen auf iOS 12: Abstände zwischen Schaltflächen im Kopfbereich fehlen (flex `gap` ist dort nicht verfügbar), und das Ziehen am Licht scrollt die Seite eventuell mit.
+Bekannte Einschränkungen auf alten Geräten: Abstände zwischen Schaltflächen fehlen teilweise (flex `gap`), und das Ziehen am Licht scrollt die Seite eventuell mit. Auf iOS 9 wird das Ziehen über Touch-Ereignisse umgesetzt, das ist nicht auf einem echten Gerät getestet.
 
 ## Eigenständige Seite (für ältere Geräte)
 

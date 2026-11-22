@@ -2,7 +2,7 @@
  * Tessella – eigenständige Seite ohne die HA-Oberfläche (für ältere Browser wie iOS 12).
  * Stellt die Verbindung zu Home Assistant über die Websocket-API her und gibt dem Panel
  * ein `hass`-Objekt mit denselben Eigenschaften, die das Panel auch vom HA-Frontend bekommt.
- * Syntax bewusst ES2017, ohne ?. und ??.
+ * Syntax bewusst ES5, damit auch iOS 9 läuft.
  */
 (function () {
   "use strict";
@@ -15,7 +15,8 @@
   var logoutBtn = document.getElementById("logout");
 
   var sock = null;
-  var panel = null;
+  var core = null;
+  var host = null;
   var hass = { states: {}, user: { is_admin: false }, language: "de", callWS: null, callService: null };
 
   function setStatus(text) {
@@ -192,16 +193,24 @@
     formEl.hidden = false;
     logoutBtn.hidden = true;
     setStatus(message || "");
-    if (panel) {
-      panel.remove();
-      panel = null;
+    if (core) {
+      core.disconnected();
+      core = null;
+    }
+    if (host) {
+      app.removeChild(host);
+      host = null;
     }
   }
 
   function mountPanel() {
-    if (panel) return;
-    panel = document.createElement("tessella-panel");
-    app.appendChild(panel);
+    if (core) return;
+    // Kern direkt einbinden: funktioniert auch ohne Custom Elements (iOS 9).
+    host = document.createElement("div");
+    host.className = "tessella-host";
+    app.appendChild(host);
+    core = new window.Tessella(host, {});
+    core.connected();
     formEl.hidden = true;
     logoutBtn.hidden = false;
     setStatus("");
@@ -230,7 +239,7 @@
             return sock.subscribe({ type: "subscribe_entities" }, function (event) {
               applyEntities(event);
               mountPanel();
-              panel.hass = hass;
+              core.setHass(hass);
               setStatus("");
             });
           })

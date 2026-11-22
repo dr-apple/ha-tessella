@@ -1,988 +1,1200 @@
 /*
  * Tessella – Kachel-Dashboards für Smartphone und Tablet.
- * Eine Datei, kein Build-Schritt. Läuft als HA-Panel (bekommt `hass` von Home Assistant).
+ *
+ * Bewusst in ES5 geschrieben (keine let/const, Pfeilfunktionen, async, Spread, ?. oder ??),
+ * ohne CSS-Grid und ohne Pfeil-Syntax, damit auch iOS 9 (Safari 9) läuft.
+ *
+ * Zwei Einstiege:
+ *  - window.Tessella: der Kern. Bekommt ein Wurzelelement (Shadow Root oder normales div)
+ *    und ein hass-Objekt. Wird von der eigenständigen Seite (standalone.html) benutzt.
+ *  - <tessella-panel>: das HA-Panel. Nur in Browsern mit Custom Elements.
  */
+(function (global) {
+  "use strict";
 
-const TYPES = {
-  toggle: "Schalter",
-  light: "Licht (ziehen = dimmen)",
-  sensor: "Sensor",
-  button: "Knopf (Dienst)",
-  climate: "Thermostat",
-  cover: "Rollo / Tor",
-  camera: "Kamera",
-  history: "Verlauf (24 h)",
-  clock: "Uhr",
-  text: "Text",
-  web: "Webseite",
-};
+  var TYPES = {
+    toggle: "Schalter",
+    light: "Licht (ziehen = dimmen)",
+    sensor: "Sensor",
+    button: "Knopf (Dienst)",
+    climate: "Thermostat",
+    cover: "Rollo / Tor",
+    camera: "Kamera",
+    history: "Verlauf (24 h)",
+    clock: "Uhr",
+    text: "Text",
+    web: "Webseite"
+  };
+  var TYPE_ORDER = ["toggle", "light", "sensor", "button", "climate", "cover", "camera", "history", "clock", "text", "web"];
 
-const NEEDS_ENTITY = ["toggle", "light", "sensor", "climate", "cover", "camera", "history"];
+  var NEEDS_ENTITY = ["toggle", "light", "sensor", "climate", "cover", "camera", "history"];
 
-const DEFAULT_ICON = {
-  toggle: "mdi:toggle-switch",
-  light: "mdi:lightbulb",
-  sensor: "mdi:gauge",
-  button: "mdi:gesture-tap-button",
-  climate: "mdi:thermostat",
-  cover: "mdi:window-shutter",
-  camera: "mdi:cctv",
-  history: "mdi:chart-line",
-  clock: "mdi:clock-outline",
-  text: "mdi:text",
-  web: "mdi:web",
-};
+  var DEFAULT_ICON = {
+    toggle: "mdi:toggle-switch",
+    light: "mdi:lightbulb",
+    sensor: "mdi:gauge",
+    button: "mdi:gesture-tap-button",
+    climate: "mdi:thermostat",
+    cover: "mdi:window-shutter",
+    camera: "mdi:cctv",
+    history: "mdi:chart-line",
+    clock: "mdi:clock-outline",
+    text: "mdi:text",
+    web: "mdi:web"
+  };
 
-const STATE_TEXT = { on: "An", off: "Aus", unavailable: "Nicht verfügbar", unknown: "Unbekannt" };
+  var STATE_TEXT = { on: "An", off: "Aus", unavailable: "Nicht verfügbar", unknown: "Unbekannt" };
 
-const uid = (prefix = "k") => prefix + Math.random().toString(36).slice(2, 9);
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const haptic = () => { try { navigator.vibrate && navigator.vibrate(12); } catch (_) { /* ignorieren */ } };
+  var ROW_H = 96;
+  var GAP = 10;
+  var PAD = 12;
 
-function h(tag, props, ...children) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props || {})) {
-    if (v === undefined || v === null || v === false) continue;
-    if (k === "class") el.className = v;
-    else if (k === "text") el.textContent = String(v);
-    else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2), v);
-    else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
-    else if (k === "value" || k === "checked" || k === "disabled" || k === "selected") el[k] = v;
-    else el.setAttribute(k, v === true ? "" : String(v));
+  var STYLE = [
+    "* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }",
+    ".app { min-height: 100%; display: -webkit-box; display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column;",
+    "       background: var(--primary-background-color, #111); color: var(--primary-text-color, #eee);",
+    "       font-family: system-ui, -apple-system, sans-serif; }",
+    "header { position: relative; z-index: 5; display: -webkit-box; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;",
+    "         padding: 8px 10px; background: var(--app-header-background-color, var(--primary-background-color, #111));",
+    "         border-bottom: 1px solid var(--divider-color, #333); }",
+    ".title { -webkit-box-flex: 1; -webkit-flex: 1; flex: 1; font-size: 1.15rem; font-weight: 600; overflow: hidden; white-space: nowrap; cursor: pointer; }",
+    ".status { font-size: .75rem; color: var(--secondary-text-color, #999); margin-right: 4px; }",
+    ".ib { -webkit-appearance: none; appearance: none; border: 0; background: transparent; color: inherit; width: 40px; height: 40px;",
+    "      border-radius: 50%; display: inline-block; text-align: center; line-height: 40px; cursor: pointer; font-size: 0; }",
+    ".ib ha-icon { display: inline-block; vertical-align: middle; }",
+    ".ib:active { background: rgba(128,128,128,.25); }",
+    ".ib.on { color: var(--primary-color, #03a9f4); }",
+    ".ib[hidden] { display: none; }",
+    "nav.pages { padding: 8px 10px 0; overflow-x: auto; white-space: nowrap; }",
+    ".pill { -webkit-appearance: none; appearance: none; border: 1px solid var(--divider-color, #444); background: transparent; color: inherit;",
+    "        border-radius: 999px; padding: 6px 14px; margin-right: 6px; font: inherit; font-size: .9rem; white-space: nowrap; cursor: pointer; }",
+    ".pill.active { background: var(--primary-color, #03a9f4); border-color: transparent; color: #fff; }",
+    "main { position: relative; -webkit-box-flex: 1; -webkit-flex: 1; flex: 1; }",
+    ".grid { position: relative; width: 100%; }",
+    ".empty { position: absolute; padding: 40px 20px; text-align: center; color: var(--secondary-text-color, #999); }",
+    ".tile { position: absolute; overflow: hidden; border-radius: 18px; padding: 12px; display: -webkit-box; display: -webkit-flex; display: flex;",
+    "        -webkit-flex-direction: column; flex-direction: column;",
+    "        background: var(--ha-card-background, var(--card-background-color, #1e1e1e)); color: inherit;",
+    "        box-shadow: 0 1px 3px rgba(0,0,0,.25); cursor: default; -webkit-user-select: none; user-select: none; }",
+    ".tile .tl-head { display: block; font-size: .9rem; color: var(--secondary-text-color, #aaa); white-space: nowrap; overflow: hidden; }",
+    ".tile .tl-head ha-icon { --mdc-icon-size: 22px; vertical-align: middle; margin-right: 6px; }",
+    ".tile .tl-value { margin-top: auto; font-size: 1.35rem; font-weight: 600; }",
+    ".tile.on { background: var(--primary-color, #03a9f4); color: #fff; }",
+    ".tile.unavail { opacity: .5; }",
+    ".tile.flash { opacity: .75; }",
+    ".tile.toggle, .tile.button { cursor: pointer; }",
+    ".edit .tile { outline: 2px dashed var(--primary-color, #03a9f4); outline-offset: -2px; cursor: pointer; }",
+    ".add-tile { position: absolute; text-align: center; border: 2px dashed var(--divider-color, #555); background: transparent;",
+    "            border-radius: 18px; color: var(--secondary-text-color, #999); font: inherit; cursor: pointer; }",
+    ".tile.light { padding: 0; touch-action: none; }",
+    ".tile.light .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--primary-color, #03a9f4); opacity: .85; pointer-events: none; }",
+    ".tile.light .lbl { position: relative; padding: 12px; height: 100%; pointer-events: none; }",
+    ".tile.light .pct { font-size: 1.6rem; font-weight: 700; margin-top: 30px; }",
+    ".tile.camera { padding: 0; }",
+    ".tile.camera img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }",
+    ".tile.camera .cam-lbl { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px; background: rgba(0,0,0,.45); color: #fff; font-size: .85rem; }",
+    ".climate-row { margin-top: auto; }",
+    ".climate-row .big { font-size: 1.6rem; font-weight: 700; }",
+    ".stepper { margin-top: 6px; }",
+    ".stepper button { -webkit-appearance: none; appearance: none; border: 0; border-radius: 50%; width: 40px; height: 40px; font-size: 1.3rem; cursor: pointer;",
+    "                  background: rgba(128,128,128,.3); color: inherit; display: inline-block; vertical-align: middle; margin: 0 4px; }",
+    ".stepper button:disabled { opacity: .4; }",
+    ".cover-row { margin-top: auto; }",
+    ".cover-row button { -webkit-appearance: none; appearance: none; border: 0; border-radius: 12px; height: 44px; width: 31%; margin-right: 2%; cursor: pointer;",
+    "                    background: rgba(128,128,128,.3); color: inherit; font-size: 1.2rem; }",
+    ".spark { width: 100%; height: 60px; margin-top: 6px; }",
+    ".spark polyline { fill: none; stroke: var(--primary-color, #03a9f4); stroke-width: 2; }",
+    ".spark-meta { font-size: .75rem; color: var(--secondary-text-color, #999); }",
+    ".clock-time { font-size: 2.6rem; font-weight: 300; margin-top: auto; line-height: 1; }",
+    ".clock-date { color: var(--secondary-text-color, #aaa); font-size: .9rem; margin-top: 4px; }",
+    ".text-body { white-space: pre-wrap; margin-top: 6px; font-size: 1rem; }",
+    ".tile.web iframe { position: absolute; top: 0; left: 0; border: 0; width: 100%; height: 100%; }",
+    ".tile.web .tl-head { position: absolute; z-index: 1; left: 12px; top: 12px; background: #1e1e1e; border-radius: 8px; padding: 2px 6px; }",
+    ".sheet-back { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 20; background: rgba(0,0,0,.45); }",
+    ".sheet-back[hidden] { display: none; }",
+    ".sheet { position: absolute; bottom: 0; left: 0; right: 0; max-height: 92%; overflow-y: auto; -webkit-overflow-scrolling: touch;",
+    "         background: var(--ha-card-background, var(--card-background-color, #222)); color: var(--primary-text-color, #eee);",
+    "         border-radius: 20px 20px 0 0; padding: 16px 16px 24px; }",
+    ".sheet h2 { margin: 0 0 12px; font-size: 1.1rem; }",
+    ".sheet .row { margin-bottom: 12px; }",
+    ".sheet label { display: block; font-size: .8rem; color: var(--secondary-text-color, #aaa); margin-bottom: 4px; }",
+    ".sheet input, .sheet select, .sheet textarea { font: inherit; font-size: 1rem; padding: 10px; border-radius: 10px; border: 1px solid var(--divider-color, #444);",
+    "            background: var(--primary-background-color, #111); color: inherit; width: 100%; }",
+    ".sheet textarea { min-height: 80px; font-family: monospace; font-size: .85rem; }",
+    ".sheet .btns { margin-top: 8px; }",
+    ".btn { -webkit-appearance: none; appearance: none; display: inline-block; border: 0; border-radius: 12px; padding: 11px 16px; margin: 0 6px 6px 0; font: inherit; cursor: pointer;",
+    "       background: rgba(128,128,128,.3); color: inherit; }",
+    ".btn.primary { background: var(--primary-color, #03a9f4); color: #fff; }",
+    ".btn.danger { background: var(--error-color, #db4437); color: #fff; }",
+    ".btn:disabled { opacity: .4; }",
+    ".types .btn { display: block; width: 100%; text-align: left; margin: 0 0 8px 0; }",
+    ".list-item { display: block; width: 100%; text-align: left; margin-bottom: 6px; }",
+    ".list-item.current { outline: 2px solid var(--primary-color, #03a9f4); }",
+    ".hint { font-size: .8rem; color: var(--secondary-text-color, #999); margin: -6px 0 10px; }",
+    ".toast { position: fixed; left: 10%; right: 10%; bottom: 24px; z-index: 30; background: #333; color: #fff; padding: 10px 16px; border-radius: 12px;",
+    "         font-size: .9rem; text-align: center; }",
+    ".toast[hidden] { display: none; }",
+    ".readonly .edit-only { display: none; }"
+  ].join("\n");
+
+  // ---------- Hilfsfunktionen ----------
+
+  function uid(prefix) {
+    return (prefix || "k") + Math.random().toString(36).slice(2, 9);
   }
-  for (const c of children.flat()) {
-    if (c === null || c === undefined || c === false) continue;
-    el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+
+  function clamp(v, lo, hi) {
+    return Math.min(hi, Math.max(lo, v));
   }
-  return el;
-}
 
-const icon = (name, cls = "") => h("ha-icon", { icon: name, class: cls });
-
-// Kompatibilität mit älteren Safari-Versionen (iOS 12/13): replaceChildren, Pointer-Events
-// und addEventListener auf MediaQueryList fehlen dort.
-function replaceKids(el, ...nodes) {
-  while (el.firstChild) el.removeChild(el.firstChild);
-  for (const n of nodes.flat()) {
-    if (n === null || n === undefined || n === false) continue;
-    el.appendChild(n instanceof Node ? n : document.createTextNode(String(n)));
+  function haptic() {
+    try {
+      if (navigator.vibrate) navigator.vibrate(12);
+    } catch (e) { /* ignorieren */ }
   }
-}
 
-const HAS_POINTER = "PointerEvent" in window;
-const TOUCH_FOR = { pointerdown: "touchstart", pointermove: "touchmove", pointerup: "touchend", pointercancel: "touchcancel" };
-
-function onPtr(el, name, fn) {
-  if (HAS_POINTER) {
-    el.addEventListener(name, fn);
-    return;
+  function flat(arr) {
+    var out = [];
+    for (var i = 0; i < arr.length; i++) {
+      if (Object.prototype.toString.call(arr[i]) === "[object Array]") out = out.concat(flat(arr[i]));
+      else out.push(arr[i]);
+    }
+    return out;
   }
-  el.addEventListener(
-    TOUCH_FOR[name],
-    (ev) => {
-      const t = ev.changedTouches && ev.changedTouches[0];
+
+  function copyObj(src) {
+    var out = {};
+    for (var k in src) if (src.hasOwnProperty(k)) out[k] = src[k];
+    return out;
+  }
+
+  function keysOf(obj) {
+    var out = [];
+    for (var k in obj) if (obj.hasOwnProperty(k)) out.push(k);
+    return out;
+  }
+
+  function includes(arr, v) {
+    return arr.indexOf(v) >= 0;
+  }
+
+  // h(tag, props, ...children) – erzeugt Elemente ohne moderne Syntax
+  function h(tag, props) {
+    var el = document.createElement(tag);
+    var k;
+    props = props || {};
+    for (k in props) {
+      if (!props.hasOwnProperty(k)) continue;
+      var v = props[k];
+      if (v === undefined || v === null || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k === "text") el.textContent = String(v);
+      else if (k.indexOf("on") === 0 && typeof v === "function") el.addEventListener(k.slice(2), v);
+      else if (k === "style" && typeof v === "object") {
+        for (var s in v) if (v.hasOwnProperty(s)) el.style[s] = v[s];
+      } else if (k === "value" || k === "checked" || k === "disabled" || k === "selected") el[k] = v;
+      else el.setAttribute(k, v === true ? "" : String(v));
+    }
+    var kids = flat(Array.prototype.slice.call(arguments, 2));
+    for (var i = 0; i < kids.length; i++) {
+      var c = kids[i];
+      if (c === null || c === undefined || c === false) continue;
+      el.appendChild(c instanceof Node ? c : document.createTextNode(String(c)));
+    }
+    return el;
+  }
+
+  function icon(name, cls) {
+    return h("ha-icon", { icon: name, "class": cls || "" });
+  }
+
+  function replaceKids(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+    var nodes = flat(Array.prototype.slice.call(arguments, 1));
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n === null || n === undefined || n === false) continue;
+      el.appendChild(n instanceof Node ? n : document.createTextNode(String(n)));
+    }
+  }
+
+  function hasClass(el, c) {
+    return !!el && !!el.className && typeof el.className === "string" && (" " + el.className + " ").indexOf(" " + c + " ") >= 0;
+  }
+
+  function setClass(el, c, on) {
+    var has = hasClass(el, c);
+    if (on && !has) el.className = (el.className + " " + c).replace(/^\s+/, "");
+    else if (!on && has) el.className = (" " + el.className + " ").replace(" " + c + " ", " ").replace(/^\s+|\s+$/g, "");
+  }
+
+  // Nächstes Elternelement (inklusive el), für das pred true liefert
+  function findUp(el, pred) {
+    var n = el;
+    while (n && n.nodeType === 1) {
+      if (pred(n)) return n;
+      n = n.parentNode;
+    }
+    return null;
+  }
+
+  function pathOf(e) {
+    if (e.composedPath) return e.composedPath();
+    var out = [];
+    var n = e.target;
+    while (n) {
+      out.push(n);
+      n = n.parentNode || n.host;
+    }
+    return out;
+  }
+
+  function stateText(st) {
+    if (!st) return "—";
+    return STATE_TEXT[st.state] != null ? STATE_TEXT[st.state] : st.state;
+  }
+
+  function numberOr(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) && v !== null && v !== "" ? n : fallback;
+  }
+
+  function queryParam(name) {
+    var m = new RegExp("[?&]" + name + "=([^&]*)").exec(location.search);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+
+  // Zeiger-Ereignisse: auf iOS 9 gibt es keine Pointer-Events, dort nehmen wir Touch-Ereignisse.
+  var HAS_POINTER = typeof window !== "undefined" && "PointerEvent" in window;
+  var TOUCH_FOR = { pointerdown: "touchstart", pointermove: "touchmove", pointerup: "touchend", pointercancel: "touchcancel" };
+
+  function onPtr(el, name, fn) {
+    if (HAS_POINTER) {
+      el.addEventListener(name, fn);
+      return;
+    }
+    el.addEventListener(TOUCH_FOR[name], function (ev) {
+      var t = ev.changedTouches && ev.changedTouches[0];
       if (!t) return;
       fn({
         clientX: t.clientX,
         clientY: t.clientY,
         pointerId: 1,
         target: ev.target,
-        preventDefault: () => ev.preventDefault(),
-        composedPath: () => (ev.composedPath ? ev.composedPath() : [ev.target]),
+        preventDefault: function () { ev.preventDefault(); },
+        composedPath: function () { return pathOf(ev); }
       });
-    },
-    { passive: true }
-  );
-}
+    }, false);
+  }
 
-function mqListen(mq, fn) {
-  if (mq.addEventListener) mq.addEventListener("change", fn);
-  else mq.addListener(fn);
-}
+  function mqListen(mq, fn) {
+    if (mq.addEventListener) mq.addEventListener("change", fn);
+    else if (mq.addListener) mq.addListener(fn);
+  }
 
-function stateText(st) {
-  if (!st) return "—";
-  return STATE_TEXT[st.state] != null ? STATE_TEXT[st.state] : st.state;
-}
+  // Platzierung der Kacheln: wie CSS-Grid (zeilenweise, dicht nicht nötig), aber in JS,
+  // weil iOS 9 kein CSS-Grid kennt.
+  function placeTiles(items, cols) {
+    var occ = [];
+    var out = [];
+    var cr = 0;
+    var cc = 0;
+    var maxRow = 0;
+    var i;
 
-function numberOr(v, fallback) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
+    function free(r, c, w, hgt) {
+      if (c + w > cols) return false;
+      for (var a = 0; a < hgt; a++) {
+        for (var b = 0; b < w; b++) {
+          if (occ[r + a] && occ[r + a][c + b]) return false;
+        }
+      }
+      return true;
+    }
 
-const STYLE = `
-  :host { display: block; height: 100%; }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  .app { min-height: 100%; display: flex; flex-direction: column;
-         background: var(--primary-background-color, #111); color: var(--primary-text-color, #eee);
-         font-family: var(--paper-font-body1_-_font-family, system-ui, sans-serif); }
-  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 6px;
-           padding: calc(env(safe-area-inset-top, 0px) + 8px) 10px 8px; background: var(--app-header-background-color, var(--primary-background-color));
-           border-bottom: 1px solid var(--divider-color, #333); }
-  .title { flex: 1; font-size: 1.15rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-  .status { font-size: .75rem; color: var(--secondary-text-color, #999); }
-  .ib { appearance: none; border: 0; background: transparent; color: inherit; width: 40px; height: 40px;
-        border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
-  .ib:active { background: var(--divider-color, rgba(128,128,128,.25)); }
-  .ib.on { color: var(--primary-color, #03a9f4); }
-  .ib[hidden] { display: none; }
-  nav.pages { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; scrollbar-width: none; }
-  nav.pages::-webkit-scrollbar { display: none; }
-  .pill { appearance: none; border: 1px solid var(--divider-color, #444); background: transparent; color: inherit;
-          border-radius: 999px; padding: 6px 14px; font: inherit; font-size: .9rem; white-space: nowrap; cursor: pointer; }
-  .pill.active { background: var(--primary-color, #03a9f4); border-color: transparent; color: var(--text-primary-color, #fff); }
-  main { flex: 1; touch-action: pan-y; }
-  .grid { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
-          grid-auto-rows: minmax(96px, auto); gap: 10px; padding: 12px; }
-  .empty { padding: 40px 20px; text-align: center; color: var(--secondary-text-color, #999); grid-column: 1 / -1; }
-  .tile { position: relative; overflow: hidden; border-radius: 18px; padding: 12px; display: flex; flex-direction: column;
-          background: var(--ha-card-background, var(--card-background-color, #1e1e1e)); color: inherit;
-          box-shadow: 0 1px 3px rgba(0,0,0,.25); cursor: default; user-select: none; -webkit-user-select: none; }
-  .tile .tl-head { display: flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--secondary-text-color, #aaa); min-width: 0; }
-  .tile .tl-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tile .tl-head ha-icon { --mdc-icon-size: 22px; flex: none; }
-  .tile .tl-value { margin-top: auto; font-size: 1.35rem; font-weight: 600; }
-  .tile.on { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
-  .tile.on .tl-head { color: inherit; }
-  .tile.unavail { opacity: .5; }
-  .tile.flash { filter: brightness(1.35); }
-  .tile.toggle, .tile.button, .tile.web-tap { cursor: pointer; }
-  .tile.toggle:active, .tile.button:active { transform: scale(.97); }
-  .tile { transition: transform .12s ease, background-color .2s ease, filter .2s ease; }
-  .edit .tile { outline: 2px dashed var(--primary-color, #03a9f4); outline-offset: -2px; cursor: pointer; }
-  .add-tile { display: flex; align-items: center; justify-content: center; border: 2px dashed var(--divider-color, #555);
-              background: transparent; border-radius: 18px; color: var(--secondary-text-color, #999); font: inherit; cursor: pointer; min-height: 96px; }
-  .add-tile ha-icon { --mdc-icon-size: 34px; }
-  /* Licht */
-  .tile.light { touch-action: none; padding: 0; }
-  .tile.light .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--primary-color, #03a9f4);
-                     opacity: .85; transition: height .15s linear; pointer-events: none; }
-  .tile.light .lbl { position: relative; padding: 12px; display: flex; flex-direction: column; height: 100%; pointer-events: none; }
-  .tile.light .pct { font-size: 1.6rem; font-weight: 700; margin-top: auto; }
-  .tile.light.dragging .bar { transition: none; }
-  /* Kamera */
-  .tile.camera { padding: 0; }
-  .tile.camera img { width: 100%; height: 100%; object-fit: cover; display: block; position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
-  .tile.camera .cam-lbl { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px; background: rgba(0,0,0,.45); color: #fff; font-size: .85rem; }
-  /* Thermostat */
-  .climate-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; }
-  .climate-row .big { font-size: 1.6rem; font-weight: 700; }
-  .stepper { display: flex; align-items: center; gap: 6px; }
-  .stepper button { appearance: none; border: 0; border-radius: 50%; width: 40px; height: 40px; font-size: 1.3rem; cursor: pointer;
-                    background: var(--divider-color, rgba(128,128,128,.3)); color: inherit; }
-  .stepper button:disabled { opacity: .4; }
-  /* Rollo */
-  .cover-row { display: flex; gap: 6px; margin-top: auto; }
-  .cover-row button { flex: 1; appearance: none; border: 0; border-radius: 12px; height: 44px; cursor: pointer;
-                      background: var(--divider-color, rgba(128,128,128,.3)); color: inherit; }
-  .cover-row button ha-icon { --mdc-icon-size: 24px; }
-  /* Verlauf */
-  .spark { width: 100%; height: 60px; margin-top: 6px; }
-  .spark polyline { fill: none; stroke: var(--primary-color, #03a9f4); stroke-width: 2; vector-effect: non-scaling-stroke; }
-  .spark-meta { font-size: .75rem; color: var(--secondary-text-color, #999); display: flex; justify-content: space-between; }
-  /* Uhr */
-  .clock-time { font-size: 2.6rem; font-weight: 300; margin-top: auto; line-height: 1; font-variant-numeric: tabular-nums; }
-  .clock-date { color: var(--secondary-text-color, #aaa); font-size: .9rem; margin-top: 4px; }
-  .text-body { white-space: pre-wrap; margin-top: 6px; font-size: 1rem; }
-  .tile.web iframe { border: 0; width: 100%; height: 100%; position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
-  .tile.web .tl-head { position: absolute; z-index: 1; left: 12px; top: 12px; background: var(--ha-card-background, #1e1e1e); border-radius: 8px; padding: 2px 6px; }
-  /* Sheets */
-  .sheet-back { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 20; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
-  .sheet-back[hidden] { display: none; }
-  .sheet { width: 100%; max-width: 640px; max-height: 92vh; overflow-y: auto; background: var(--ha-card-background, var(--card-background-color, #222));
-           color: var(--primary-text-color, #eee); border-radius: 20px 20px 0 0; padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 20px);
-           box-shadow: 0 -6px 24px rgba(0,0,0,.4); }
-  .sheet h2 { margin: 0 0 12px; font-size: 1.1rem; }
-  .sheet .row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-  .sheet label { font-size: .8rem; color: var(--secondary-text-color, #aaa); }
-  .sheet input, .sheet select, .sheet textarea { font: inherit; font-size: 1rem; padding: 10px; border-radius: 10px; border: 1px solid var(--divider-color, #444);
-            background: var(--primary-background-color, #111); color: inherit; width: 100%; }
-  .sheet textarea { min-height: 80px; font-family: ui-monospace, monospace; font-size: .85rem; }
-  .sheet .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-  .btn { appearance: none; border: 0; border-radius: 12px; padding: 11px 16px; font: inherit; cursor: pointer;
-         background: var(--divider-color, rgba(128,128,128,.3)); color: inherit; }
-  .btn.primary { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
-  .btn.danger { background: var(--error-color, #db4437); color: #fff; }
-  .btn:disabled { opacity: .4; }
-  .types { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
-  .types .btn { display: flex; align-items: center; gap: 8px; text-align: left; }
-  .list-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; margin-bottom: 6px; }
-  .list-item.current { outline: 2px solid var(--primary-color, #03a9f4); }
-  .hint { font-size: .8rem; color: var(--secondary-text-color, #999); margin: -6px 0 10px; }
-  .toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 24px); transform: translateX(-50%); z-index: 30;
-           background: #333; color: #fff; padding: 10px 16px; border-radius: 12px; max-width: 92vw; font-size: .9rem; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
-  .toast[hidden] { display: none; }
-  .readonly .ib.edit-only { display: none; }
-`;
+    function mark(r, c, w, hgt) {
+      for (var a = 0; a < hgt; a++) {
+        occ[r + a] = occ[r + a] || [];
+        for (var b = 0; b < w; b++) occ[r + a][c + b] = true;
+      }
+    }
 
-class TessellaPanel extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: "open" });
-    this._hass = null;
-    this._data = null;
-    this._loading = false;
-    this._dashId = null;
-    this._pageIdx = 0;
-    this._edit = false;
-    this._tiles = [];
-    this._saveTimer = null;
-    this._timers = new Map();
-    this._raf = 0;
-    this._wakeLock = null;
-    this._mq = window.matchMedia("(max-width: 520px)");
-    mqListen(this._mq, () => this._renderPage());
-    this._built = false;
-    this._onVisible = () => {
-      if (document.visibilityState === "visible" && this._wantWake()) this._setWake(true, true);
+    for (i = 0; i < items.length; i++) {
+      var w = Math.min(items[i].w, cols);
+      var hgt = items[i].h;
+      var placed = false;
+      while (!placed) {
+        if (cc + w > cols) {
+          cc = 0;
+          cr++;
+          continue;
+        }
+        if (free(cr, cc, w, hgt)) {
+          mark(cr, cc, w, hgt);
+          out.push({ c: cc, r: cr, w: w, h: hgt });
+          cc += w;
+          placed = true;
+        } else {
+          cc++;
+        }
+      }
+      maxRow = Math.max(maxRow, cr + hgt);
+    }
+    return { items: out, rows: maxRow };
+  }
+
+  // ---------- Stil ----------
+
+  // ---------- Kern ----------
+
+  function Tessella(root, opts) {
+    var self = this;
+    this.root = root;
+    this.opts = opts || {};
+    this.hass = null;
+    this.data = null;
+    this.loading = false;
+    this.dashId = null;
+    this.pageIdx = 0;
+    this.edit = false;
+    this.tiles = [];
+    this.layoutItems = [];
+    this.timers = [];
+    this.saveTimer = null;
+    this.toastTimer = null;
+    this.raf = 0;
+    this.wakeLock = null;
+    this.swipe = null;
+    this.connectedFlag = false;
+    this.mq = window.matchMedia ? window.matchMedia("(max-width: 520px)") : { matches: false };
+    mqListen(this.mq, function () { self.renderPage(); });
+    this.onVisible = function () {
+      if (document.visibilityState === "visible" && self.wantWake()) self.setWake(true, true);
     };
+    this.onResize = function () { self.layout(); };
+    this.build();
   }
 
-  connectedCallback() {
-    if (!this._built) this._build();
-    this._maybeLoad();
-    document.addEventListener("visibilitychange", this._onVisible);
-  }
+  Tessella.prototype.build = function () {
+    var self = this;
+    var styleEl = h("style", { text: STYLE });
+    this.titleEl = h("div", { "class": "title", onclick: function () { self.openMenu(); } });
+    this.statusEl = h("span", { "class": "status" });
+    this.wakeBtn = h("button", { "class": "ib", title: "Display wach halten", onclick: function () { self.setWake(!self.wantWake()); } }, icon("mdi:monitor-eye"));
+    this.fsBtn = h("button", { "class": "ib", title: "Vollbild", onclick: function () { self.toggleFullscreen(); } }, icon("mdi:fullscreen"));
+    this.editBtn = h("button", { "class": "ib edit-only", title: "Bearbeiten", onclick: function () { self.toggleEdit(); } }, icon("mdi:pencil"));
+    this.menuBtn = h("button", { "class": "ib", title: "Dashboards und Seiten", onclick: function () { self.openMenu(); } }, icon("mdi:cog"));
+    this.header = h("header", null, this.titleEl, this.statusEl, this.wakeBtn, this.fsBtn, this.menuBtn, this.editBtn);
+    this.pagesEl = h("nav", { "class": "pages" });
+    this.gridEl = h("div", { "class": "grid" });
+    this.gridEl.addEventListener("click", function (e) { self.onGridClick(e); });
+    this.mainEl = h("main", null, this.gridEl);
+    onPtr(this.mainEl, "pointerdown", function (e) { self.swipeStart(e); });
+    onPtr(this.mainEl, "pointerup", function (e) { self.swipeEnd(e); });
+    onPtr(this.mainEl, "pointercancel", function () { self.swipe = null; });
+    this.sheetEl = h("div", { "class": "sheet" });
+    this.sheetBack = h("div", { "class": "sheet-back", hidden: true, onclick: function (e) { if (e.target === self.sheetBack) self.closeSheet(); } }, this.sheetEl);
+    this.toastEl = h("div", { "class": "toast", hidden: true });
+    this.app = h("div", { "class": "app" }, this.header, this.pagesEl, this.mainEl, this.sheetBack, this.toastEl);
+    replaceKids(this.root, styleEl, this.app);
+    this.built = true;
+    this.setWakeButton();
+    if (this.wantWake()) this.setWake(true, true);
+  };
 
-  disconnectedCallback() {
-    document.removeEventListener("visibilitychange", this._onVisible);
-    this._clearTiles();
-    // Nur die Sperre freigeben; die gespeicherte Einstellung "wach halten" bleibt erhalten.
-    if (this._wakeLock) this._wakeLock.release().catch(() => {});
-    this._wakeLock = null;
-  }
+  Tessella.prototype.connected = function () {
+    if (this.connectedFlag) return;
+    this.connectedFlag = true;
+    document.addEventListener("visibilitychange", this.onVisible, false);
+    window.addEventListener("resize", this.onResize, false);
+    this.maybeLoad();
+    this.layout();
+  };
 
-  set hass(hass) {
-    this._hass = hass;
-    if (!this._data) this._maybeLoad();
-    if (!this._raf) {
-      this._raf = requestAnimationFrame(() => {
-        this._raf = 0;
-        this._updateTiles();
+  Tessella.prototype.disconnected = function () {
+    this.connectedFlag = false;
+    document.removeEventListener("visibilitychange", this.onVisible, false);
+    window.removeEventListener("resize", this.onResize, false);
+    this.clearTiles();
+    if (this.wakeLock && this.wakeLock.release) {
+      var r = this.wakeLock.release();
+      if (r && r.catch) r.catch(function () {});
+    }
+    this.wakeLock = null;
+  };
+
+  Tessella.prototype.setHass = function (hass) {
+    var self = this;
+    this.hass = hass;
+    if (!this.data) this.maybeLoad();
+    if (!this.raf) {
+      this.raf = requestAnimationFrame(function () {
+        self.raf = 0;
+        self.updateTiles();
       });
     }
-    this._refreshAdminVisibility();
-  }
+    this.refreshAdminVisibility();
+  };
 
-  get hass() {
-    return this._hass;
-  }
-
-  // ---------- Aufbau ----------
-
-  _build() {
-    this._built = true;
-    const root = this.shadowRoot;
-    this._styleEl = h("style", { text: STYLE });
-    this._titleEl = h("div", { class: "title", onclick: () => this._openMenu() });
-    this._statusEl = h("span", { class: "status" });
-    this._wakeBtn = h("button", { class: "ib", title: "Display wach halten", onclick: () => this._setWake(!this._wantWake()) }, icon("mdi:monitor-eye"));
-    this._fsBtn = h("button", { class: "ib", title: "Vollbild", onclick: () => this._toggleFullscreen() }, icon("mdi:fullscreen"));
-    this._editBtn = h("button", { class: "ib edit-only", title: "Bearbeiten", onclick: () => this._toggleEdit() }, icon("mdi:pencil"));
-    this._menuBtn = h("button", { class: "ib", title: "Dashboards und Seiten", onclick: () => this._openMenu() }, icon("mdi:cog"));
-    this._header = h("header", null, this._titleEl, this._statusEl, this._wakeBtn, this._fsBtn, this._menuBtn, this._editBtn);
-    this._pagesEl = h("nav", { class: "pages" });
-    this._gridEl = h("div", { class: "grid" });
-    this._mainEl = h("main", null, this._gridEl);
-    onPtr(this._mainEl, "pointerdown", (e) => this._swipeStart(e));
-    onPtr(this._mainEl, "pointerup", (e) => this._swipeEnd(e));
-    onPtr(this._mainEl, "pointercancel", () => (this._swipe = null));
-    this._gridEl.addEventListener("click", (e) => this._onGridClick(e));
-    this._sheetBack = h("div", { class: "sheet-back", hidden: true, onclick: (e) => { if (e.target === this._sheetBack) this._closeSheet(); } });
-    this._sheetEl = h("div", { class: "sheet" });
-    this._sheetBack.append(this._sheetEl);
-    this._toastEl = h("div", { class: "toast", hidden: true });
-    this._app = h("div", { class: "app" }, this._header, this._pagesEl, this._mainEl, this._sheetBack, this._toastEl);
-    replaceKids(root, this._styleEl, this._app);
-    this._wantWakeFromStorage();
-    this._setWakeButton();
-  }
-
-  _refreshAdminVisibility() {
-    if (!this._app) return;
-    const isAdmin = !!(this._hass && this._hass.user && this._hass.user.is_admin);
-    this._app.classList.toggle("readonly", !isAdmin);
-    if (!isAdmin && this._edit) this._edit = false;
-    this._app.classList.toggle("edit", this._edit);
-    this._editBtn.classList.toggle("on", this._edit);
-    replaceKids(this._editBtn, icon(this._edit ? "mdi:check" : "mdi:pencil"));
-  }
+  Tessella.prototype.refreshAdminVisibility = function () {
+    if (!this.app) return;
+    var isAdmin = !!(this.hass && this.hass.user && this.hass.user.is_admin);
+    setClass(this.app, "readonly", !isAdmin);
+    if (!isAdmin && this.edit) this.edit = false;
+    setClass(this.app, "edit", this.edit);
+    setClass(this.editBtn, "on", this.edit);
+    replaceKids(this.editBtn, icon(this.edit ? "mdi:check" : "mdi:pencil"));
+  };
 
   // ---------- Laden und Speichern ----------
 
-  async _maybeLoad() {
-    if (this._loading || this._data || !this._hass || !this._built) return;
-    this._loading = true;
-    try {
-      this._data = await this._hass.callWS({ type: "tessella/get" });
-      this._pickDashboard();
-      this._renderAll();
-    } catch (err) {
-      this._toast("Laden fehlgeschlagen: " + (err.message || err));
-    } finally {
-      this._loading = false;
+  Tessella.prototype.maybeLoad = function () {
+    var self = this;
+    if (this.loading || this.data || !this.hass || !this.built) return;
+    this.loading = true;
+    this.hass.callWS({ type: "tessella/get" }).then(function (d) {
+      self.loading = false;
+      self.data = d;
+      self.pickDashboard();
+      self.renderAll();
+    }, function (err) {
+      self.loading = false;
+      self.toast("Laden fehlgeschlagen: " + ((err && err.message) || err));
+    });
+  };
+
+  Tessella.prototype.pickDashboard = function () {
+    var ids = keysOf(this.data.dashboards);
+    var candidates = [queryParam("d"), localStorage.getItem("tessella.dashboard"), this.dashId, ids[0]];
+    var chosen = null;
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i] && this.data.dashboards[candidates[i]]) {
+        chosen = candidates[i];
+        break;
+      }
     }
-  }
+    this.dashId = chosen || ids[0];
+    this.pageIdx = 0;
+  };
 
-  _pickDashboard() {
-    const ids = Object.keys(this._data.dashboards);
-    const fromUrl = new URLSearchParams(location.search).get("d");
-    const fromStore = localStorage.getItem("tessella.dashboard");
-    const candidates = [fromUrl, fromStore, this._dashId, ids[0]];
-    this._dashId = candidates.find((c) => c && this._data.dashboards[c]) || ids[0];
-    this._pageIdx = 0;
-  }
+  Tessella.prototype.scheduleSave = function () {
+    var self = this;
+    this.setStatus("Ändert…");
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(function () { self.saveNow(); }, 600);
+  };
 
-  _scheduleSave() {
-    this._setStatus("Ändert…");
-    clearTimeout(this._saveTimer);
-    this._saveTimer = setTimeout(() => this._saveNow(), 600);
-  }
+  Tessella.prototype.saveNow = function () {
+    var self = this;
+    if (!this.data || !this.hass) return;
+    this.setStatus("Speichere…");
+    // Antwort nicht übernehmen: inzwischen getippte Änderungen würden sonst verloren gehen.
+    this.hass.callWS({ type: "tessella/save", data: this.data }).then(function () {
+      self.setStatus("Gespeichert");
+    }, function (err) {
+      self.setStatus("Fehler");
+      self.toast((err && err.message) || String(err));
+    });
+  };
 
-  async _saveNow() {
-    if (!this._data || !this._hass) return;
-    this._setStatus("Speichere…");
-    try {
-      // Antwort nicht übernehmen: inzwischen getippte Änderungen würden sonst verloren gehen.
-      await this._hass.callWS({ type: "tessella/save", data: this._data });
-      this._setStatus("Gespeichert");
-    } catch (err) {
-      this._setStatus("Fehler");
-      this._toast(err.message || String(err));
-    }
-  }
+  Tessella.prototype.setStatus = function (text) {
+    if (this.statusEl) this.statusEl.textContent = text || "";
+  };
 
-  _setStatus(text) {
-    if (this._statusEl) this._statusEl.textContent = text;
-  }
-
-  _mutate(fn) {
-    fn(this._data);
-    this._scheduleSave();
-    this._renderAll();
-  }
+  Tessella.prototype.mutate = function (fn) {
+    fn(this.data);
+    this.scheduleSave();
+    this.renderAll();
+  };
 
   // ---------- Zugriff auf Daten ----------
 
-  _dash() {
-    return this._data.dashboards[this._dashId];
-  }
+  Tessella.prototype.dash = function () {
+    return this.data.dashboards[this.dashId];
+  };
 
-  _pages() {
-    return this._dash().pages;
-  }
+  Tessella.prototype.pages = function () {
+    return this.dash().pages;
+  };
 
-  _page() {
-    const pages = this._pages();
-    this._pageIdx = clamp(this._pageIdx, 0, pages.length - 1);
-    return pages[this._pageIdx];
-  }
+  Tessella.prototype.page = function () {
+    var pages = this.pages();
+    this.pageIdx = clamp(this.pageIdx, 0, pages.length - 1);
+    return pages[this.pageIdx];
+  };
 
-  _cols() {
-    const page = this._page();
-    return this._mq.matches ? Math.min(page.columns, 2) : page.columns;
-  }
+  Tessella.prototype.cols = function () {
+    var page = this.page();
+    return this.mq.matches ? Math.min(page.columns, 2) : page.columns;
+  };
 
-  _wantWake() {
-    return localStorage.getItem("tessella.wake") === "1";
-  }
+  Tessella.prototype.wantWake = function () {
+    try {
+      return localStorage.getItem("tessella.wake") === "1";
+    } catch (e) {
+      return false;
+    }
+  };
 
   // ---------- Darstellung ----------
 
-  _renderAll() {
-    if (!this._data || !this._built) return;
-    this._titleEl.textContent = this._dash().title;
-    this._renderPages();
-    this._renderPage();
-  }
+  Tessella.prototype.renderAll = function () {
+    if (!this.data || !this.built) return;
+    this.titleEl.textContent = this.dash().title;
+    this.renderPages();
+    this.renderPage();
+  };
 
-  _renderPages() {
-    const pages = this._pages();
-    const children = pages.map((p, i) =>
-      h("button", { class: "pill" + (i === this._pageIdx ? " active" : ""), onclick: () => this._gotoPage(i) }, p.title)
-    );
-    if (this._edit) children.push(h("button", { class: "pill", onclick: () => this._addPage() }, "+ Seite"));
-    replaceKids(this._pagesEl, ...children);
-    this._pagesEl.hidden = pages.length <= 1 && !this._edit;
-  }
+  Tessella.prototype.renderPages = function () {
+    var self = this;
+    var pages = this.pages();
+    var children = [];
+    for (var i = 0; i < pages.length; i++) {
+      children.push(h("button", {
+        "class": "pill" + (i === this.pageIdx ? " active" : ""),
+        onclick: (function (idx) { return function () { self.gotoPage(idx); }; })(i)
+      }, pages[i].title));
+    }
+    if (this.edit) children.push(h("button", { "class": "pill", onclick: function () { self.addPage(); } }, "+ Seite"));
+    replaceKids(this.pagesEl, children);
+    this.pagesEl.hidden = pages.length <= 1 && !this.edit;
+  };
 
-  _gotoPage(i) {
-    this._pageIdx = i;
-    this._renderPages();
-    this._renderPage();
-    this._mainEl.scrollTop = 0;
-  }
+  Tessella.prototype.gotoPage = function (i) {
+    this.pageIdx = i;
+    this.renderPages();
+    this.renderPage();
+    this.mainEl.scrollTop = 0;
+  };
 
-  _renderPage() {
-    if (!this._data || !this._built) return;
-    this._clearTiles();
-    const page = this._page();
-    const cols = this._cols();
-    this._gridEl.style.setProperty("--cols", cols);
-    const nodes = [];
-    for (const tile of page.tiles) {
-      const made = this._makeTile(tile, cols);
-      this._tiles.push(made);
+  Tessella.prototype.renderPage = function () {
+    if (!this.data || !this.built) return;
+    this.clearTiles();
+    var page = this.page();
+    var cols = this.cols();
+    var nodes = [];
+    var items = [];
+    for (var i = 0; i < page.tiles.length; i++) {
+      var tile = page.tiles[i];
+      var made = this.makeTile(tile);
+      this.tiles.push(made);
       nodes.push(made.el);
+      items.push({ el: made.el, w: Math.min(tile.w, cols), h: tile.h });
     }
-    if (this._edit) {
-      nodes.push(h("button", { class: "add-tile", "data-add": "1", style: { gridColumn: "span 1" } }, icon("mdi:plus")));
+    if (this.edit) {
+      var addEl = h("button", { "class": "add-tile", "data-add": "1" }, icon("mdi:plus"));
+      nodes.push(addEl);
+      items.push({ el: addEl, w: 1, h: 1 });
     }
-    if (!page.tiles.length && !this._edit) {
-      nodes.push(h("div", { class: "empty" }, "Noch keine Kacheln. Tippe oben auf das Zahnrad und dann auf Bearbeiten."));
+    if (!page.tiles.length && !this.edit) {
+      var emptyEl = h("div", { "class": "empty" }, "Noch keine Kacheln. Tippe oben auf das Zahnrad und dann auf Bearbeiten.");
+      nodes.push(emptyEl);
+      items.push({ el: emptyEl, w: cols, h: 2 });
     }
-    replaceKids(this._gridEl, ...nodes);
-    this._updateTiles();
-  }
+    replaceKids(this.gridEl, nodes);
+    this.layoutItems = items;
+    this.layout();
+    this.updateTiles();
+  };
 
-  _clearTiles() {
-    for (const t of this._tiles) if (t.destroy) t.destroy();
-    for (const id of this._timers.values()) clearInterval(id);
-    this._timers.clear();
-    this._tiles = [];
-  }
+  // Positioniert alle Kacheln in Pixeln passend zur aktuellen Breite
+  Tessella.prototype.layout = function () {
+    if (!this.built || !this.layoutItems) return;
+    var cols = this.cols();
+    var width = this.gridEl.clientWidth || window.innerWidth || 320;
+    var cell = (width - 2 * PAD - (cols - 1) * GAP) / cols;
+    var pl = placeTiles(this.layoutItems, cols);
+    for (var i = 0; i < pl.items.length; i++) {
+      var p = pl.items[i];
+      var el = this.layoutItems[i].el;
+      el.style.left = (PAD + p.c * (cell + GAP)) + "px";
+      el.style.top = (PAD + p.r * (ROW_H + GAP)) + "px";
+      el.style.width = (p.w * cell + (p.w - 1) * GAP) + "px";
+      el.style.height = (p.h * ROW_H + (p.h - 1) * GAP) + "px";
+    }
+    var rows = Math.max(pl.rows, 1);
+    this.gridEl.style.height = (2 * PAD + rows * ROW_H + (rows - 1) * GAP) + "px";
+  };
 
-  _timer(fn, ms) {
-    const id = setInterval(fn, ms);
-    this._timers.set(id, id);
+  Tessella.prototype.clearTiles = function () {
+    var i;
+    for (i = 0; i < this.tiles.length; i++) {
+      if (this.tiles[i].destroy) this.tiles[i].destroy();
+    }
+    for (i = 0; i < this.timers.length; i++) clearInterval(this.timers[i]);
+    this.timers = [];
+    this.tiles = [];
+  };
+
+  Tessella.prototype.timer = function (fn, ms) {
+    var id = setInterval(fn, ms);
+    this.timers.push(id);
     return id;
-  }
+  };
 
-  _updateTiles() {
-    if (!this._hass) return;
-    for (const t of this._tiles) if (t.update) t.update(this._hass);
-  }
-
-  _onGridClick(e) {
-    if (!this._edit) return;
-    const add = e.target.closest("[data-add]");
-    if (add) return this._newTile();
-    const tileEl = e.target.closest(".tile");
-    if (tileEl) {
-      const tile = this._page().tiles.find((t) => t.id === tileEl.dataset.id);
-      if (tile) this._tileEditor(tile);
+  Tessella.prototype.updateTiles = function () {
+    if (!this.hass) return;
+    for (var i = 0; i < this.tiles.length; i++) {
+      if (this.tiles[i].update) this.tiles[i].update(this.hass);
     }
-  }
+  };
 
-  _span(tile, cols) {
-    return { w: Math.min(tile.w, cols), h: tile.h };
-  }
+  Tessella.prototype.onGridClick = function (e) {
+    if (!this.edit) return;
+    var self = this;
+    var add = findUp(e.target, function (n) { return n.getAttribute && n.getAttribute("data-add") !== null; });
+    if (add) return this.newTile();
+    var tileEl = findUp(e.target, function (n) { return hasClass(n, "tile"); });
+    if (!tileEl) return;
+    var id = tileEl.getAttribute("data-id");
+    var tiles = this.page().tiles;
+    for (var i = 0; i < tiles.length; i++) {
+      if (tiles[i].id === id) {
+        self.tileEditor(tiles[i], false);
+        return;
+      }
+    }
+  };
 
-  _makeTile(tile, cols) {
-    const span = this._span(tile, cols);
-    const el = h("div", {
-      class: `tile ${tile.type}`,
-      "data-id": tile.id,
-      style: { gridColumn: `span ${span.w}`, gridRow: `span ${span.h}` },
+  // Gemeinsame Hilfe: Dienst aufrufen, Fehler als Hinweis zeigen
+  Tessella.prototype.call = function (domain, service, data) {
+    var self = this;
+    return this.hass.callService(domain, service, data).catch(function (e) {
+      self.toast("Fehler: " + ((e && e.message) || e));
     });
-    const head = (name, ico) => h("div", { class: "tl-head" }, icon(ico || tile.icon || DEFAULT_ICON[tile.type]), h("span", null, name));
-    const isEdit = () => this._edit;
-    const callService = (domain, service, data) =>
-      this._hass.callService(domain, service, data).catch((e) => this._toast("Fehler: " + (e.message || e)));
-    const stateOf = (hass) => (tile.entity ? hass.states[tile.entity] : undefined);
-    const nameOf = (st) => tile.name || (st && st.attributes && st.attributes.friendly_name) || tile.entity || TYPES[tile.type];
+  };
+
+  Tessella.prototype.makeTile = function (tile) {
+    var self = this;
+    var el = h("div", { "class": "tile " + tile.type, "data-id": tile.id });
+    var headOf = function (name, ico) {
+      return h("div", { "class": "tl-head" }, icon(ico || tile.icon || DEFAULT_ICON[tile.type]), h("span", null, name));
+    };
+    var isEdit = function () { return self.edit; };
+    var stateOf = function (hass) { return tile.entity ? hass.states[tile.entity] : undefined; };
+    var nameOf = function (st) {
+      return tile.name || (st && st.attributes && st.attributes.friendly_name) || tile.entity || TYPES[tile.type];
+    };
 
     switch (tile.type) {
-      case "toggle": {
-        const label = h("div", { class: "tl-value" });
-        const head_ = head("");
-        el.append(head_, label);
-        el.addEventListener("click", () => {
-          if (isEdit() || !tile.entity) return;
-          haptic();
-          callService("homeassistant", "toggle", { entity_id: tile.entity });
-        });
-        return {
-          el,
-          update: (hass) => {
-            const st = stateOf(hass);
-            head_.querySelector("span").textContent = nameOf(st);
-            label.textContent = stateText(st);
-            el.classList.toggle("on", (st && st.state) === "on");
-            el.classList.toggle("unavail", !st || st.state === "unavailable");
-          },
-        };
-      }
-
-      case "light": {
-        el.dataset.noswipe = "1";
-        const bar = h("div", { class: "bar" });
-        const headL = head("");
-        const pct = h("div", { class: "pct" });
-        el.append(bar, h("div", { class: "lbl" }, headL, pct));
-        let drag = null;
-        let startPct = 0;
-        let lastSent = 0;
-        let lastOn = 100;
-        const curPct = (st) => {
-          if (!st || st.state !== "on") return 0;
-          if (st.attributes.brightness == null) return 100;
-          return Math.round((st.attributes.brightness / 255) * 100);
-        };
-        const setBar = (p) => {
-          bar.style.height = p + "%";
-          pct.textContent = p + " %";
-        };
-        const canDim = (st) => st && st.attributes.brightness != null;
-        onPtr(el, "pointerdown", (e) => {
-          if (isEdit() || !tile.entity) return;
-          const st = stateOf(this._hass);
-          try {
-            el.setPointerCapture(e.pointerId);
-          } catch (_) { /* Zeiger nicht aktiv (z. B. synthetisches Ereignis) */ }
-          startPct = curPct(st);
-          drag = { id: e.pointerId, y0: e.clientY, t0: Date.now(), moved: false, pct: startPct, h: el.clientHeight || 1, canDim: canDim(st) };
-        });
-        onPtr(el, "pointermove", (e) => {
-          if (!drag || drag.id !== e.pointerId || !drag.canDim) return;
-          const dy = drag.y0 - e.clientY;
-          if (!drag.moved && Math.abs(dy) < 8) return;
-          if (!drag.moved) el.classList.add("dragging");
-          drag.moved = true;
-          const p = clamp(Math.round(startPct + (dy / drag.h) * 100), 1, 100);
-          drag.pct = p;
-          setBar(p);
-          const now = Date.now();
-          if (now - lastSent > 150) {
-            lastSent = now;
-            callService("light", "turn_on", { entity_id: tile.entity, brightness_pct: p });
-          }
-        });
-        const end = (e, cancelled) => {
-          if (!drag || drag.id !== e.pointerId) return;
-          const d = drag;
-          drag = null;
-          el.classList.remove("dragging");
-          if (cancelled || !tile.entity) return;
-          const st = stateOf(this._hass);
-          if (d.moved && d.canDim) {
-            lastOn = d.pct;
-            callService("light", "turn_on", { entity_id: tile.entity, brightness_pct: d.pct });
-          } else if (!d.moved && Date.now() - d.t0 < 450) {
-            haptic();
-            if ((st && st.state) === "on") {
-              lastOn = curPct(st) || lastOn;
-              callService("light", "turn_off", { entity_id: tile.entity });
-            } else {
-              callService("light", "turn_on", d.canDim ? { entity_id: tile.entity, brightness_pct: lastOn } : { entity_id: tile.entity });
-            }
-          }
-        };
-        onPtr(el, "pointerup", (e) => end(e, false));
-        onPtr(el, "pointercancel", (e) => end(e, true));
-        return {
-          el,
-          update: (hass) => {
-            const st = stateOf(hass);
-            replaceKids(headL, icon(tile.icon || DEFAULT_ICON.light), h("span", null, nameOf(st)));
-            el.classList.toggle("on", (st && st.state) === "on");
-            el.classList.toggle("unavail", !st || st.state === "unavailable");
-            if (!drag || !drag.moved) {
-              const p = curPct(st);
-              setBar(p);
-              if ((st && st.state) === "on") lastOn = p || lastOn;
-            }
-          },
-        };
-      }
-
-      case "sensor": {
-        const val = h("div", { class: "tl-value" });
-        const headS = head("");
-        el.append(headS, val);
-        return {
-          el,
-          update: (hass) => {
-            const st = stateOf(hass);
-            headS.querySelector("span").textContent = nameOf(st);
-            const unit = (st && st.attributes && st.attributes.unit_of_measurement);
-            val.textContent = st ? `${st.state}${unit ? " " + unit : ""}` : "—";
-            el.classList.toggle("unavail", !st || st.state === "unavailable");
-          },
-        };
-      }
-
-      case "button": {
-        const val = h("div", { class: "tl-value" });
-        const headB = head("");
-        el.append(headB, val);
-        el.addEventListener("click", () => {
-          if (isEdit() || !tile.service) return;
-          const [domain, service] = tile.service.split(".");
-          const data = { ...(tile.data || {}) };
-          if (tile.entity) data.entity_id = tile.entity;
-          haptic();
-          el.classList.add("flash");
-          setTimeout(() => el.classList.remove("flash"), 300);
-          callService(domain, service, data);
-        });
-        return {
-          el,
-          update: (hass) => {
-            const st = stateOf(hass);
-            headB.querySelector("span").textContent = tile.name || TYPES.button;
-            val.textContent = st ? stateText(st) : "";
-          },
-        };
-      }
-
-      case "climate": {
-        el.dataset.noswipe = "1";
-        const cur = h("div", { class: "big" });
-        const target = h("div", { class: "big" });
-        const headC = head("");
-        let pending = null;
-        let timer = null;
-        const send = (value) => {
-          clearTimeout(timer);
-          timer = setTimeout(() => {
-            callService("climate", "set_temperature", { entity_id: tile.entity, temperature: value });
-            pending = null;
-          }, 700);
-        };
-        const step = (dir, st) => {
-          if (isEdit() || !st) return;
-          const s = numberOr(st.attributes.target_temp_step, 0.5);
-          const base = pending != null ? pending : numberOr(st.attributes.temperature, 20);
-          pending = Math.round((base + dir * s) * 10) / 10;
-          target.textContent = pending.toFixed(1) + "°";
-          send(pending);
-        };
-        const minus = h("button", { onclick: () => step(-1, stateOf(this._hass)) }, "−");
-        const plus = h("button", { onclick: () => step(1, stateOf(this._hass)) }, "+");
-        el.append(
-          headC,
-          h("div", { class: "climate-row" }, h("div", null, cur), h("div", { class: "stepper" }, minus, target, plus))
-        );
-        return {
-          el,
-          update: (hass) => {
-            const st = stateOf(hass);
-            headC.querySelector("span") && (headC.querySelector("span").textContent = nameOf(st));
-            const unit = (st && st.attributes && st.attributes.temperature_unit) || "°";
-            cur.textContent = (st && st.attributes && st.attributes.current_temperature) != null ? `${st.attributes.current_temperature}${unit}` : stateText(st);
-            if (pending == null) target.textContent = (st && st.attributes && st.attributes.temperature) != null ? `${st.attributes.temperature}${unit}` : "—";
-            minus.disabled = !st;
-            plus.disabled = !st;
-          },
-        };
-      }
-
-      case "cover": {
-        const val = h("div", { class: "tl-value", style: { fontSize: "1rem" } });
-        const headV = head("");
-        const act = (service) => {
-          if (isEdit() || !tile.entity) return;
-          haptic();
-          callService("cover", service, { entity_id: tile.entity });
-        };
-        const btn = (ico, service) =>
-          h("button", { onclick: () => act(service), "aria-label": service }, icon(ico));
-        el.append(headV, val, h("div", { class: "cover-row" }, btn("mdi:arrow-up", "open_cover"), btn("mdi:stop", "stop_cover"), btn("mdi:arrow-down", "close_cover")));
-        return {
-          el,
-          update: (hass) => {
-            const st = stateOf(hass);
-            headV.querySelector("span") && (headV.querySelector("span").textContent = nameOf(st));
-            const pos = (st && st.attributes && st.attributes.current_position);
-            val.textContent = pos != null ? `${stateText(st)} · ${pos} %` : stateText(st);
-          },
-        };
-      }
-
-      case "camera": {
-        el.classList.add("camera");
-        el.dataset.noswipe = "1";
-        const img = h("img", { alt: "" });
-        const label = h("div", { class: "cam-lbl" });
-        el.append(img, label);
-        let base = "";
-        const refresh = () => {
-          if (!base) return;
-          // Datenadressen (data:) nicht mit Zeitstempel versehen, sonst werden sie ungültig.
-          img.src = base.startsWith("data:") ? base : base + (base.includes("?") ? "&" : "?") + "t=" + Date.now();
-        };
-        const timer = this._timer(refresh, 15000);
-        return {
-          el,
-          destroy: () => clearInterval(timer),
-          update: (hass) => {
-            const st = stateOf(hass);
-            label.textContent = nameOf(st);
-            const pic = (st && st.attributes && st.attributes.entity_picture);
-            if (pic && pic !== base) {
-              base = pic;
-              refresh();
-            }
-          },
-        };
-      }
-
-      case "history": {
-        const val = h("div", { class: "tl-value", style: { fontSize: "1.1rem" } });
-        const svg = h("svg", { class: "spark", viewBox: "0 0 100 40", preserveAspectRatio: "none" }, h("polyline", { points: "" }));
-        const meta = h("div", { class: "spark-meta" }, h("span", null, ""), h("span", null, ""));
-        const headH = head("");
-        el.append(headH, val, svg, meta);
-        const load = async () => {
-          if (!tile.entity || !this._hass) return;
-          const end = new Date();
-          const start = new Date(end.getTime() - 24 * 3600 * 1000);
-          try {
-            const res = await this._hass.callWS({
-              type: "history/history_during_period",
-              start_time: start.toISOString(),
-              end_time: end.toISOString(),
-              entity_ids: [tile.entity],
-              minimal_response: true,
-              no_attributes: true,
-            });
-            const rows = (res && res[tile.entity]) || [];
-            const pts = [];
-            for (const r of rows) {
-              const v = parseFloat(r.state != null ? r.state : r.s);
-              const t = r.lu ? r.lu * 1000 : Date.parse(r.last_updated || r.last_changed);
-              if (Number.isFinite(v) && Number.isFinite(t)) pts.push([t, v]);
-            }
-            if (pts.length < 2) {
-              svg.querySelector("polyline").setAttribute("points", "");
-              meta.children[0].textContent = "zu wenig Daten";
-              return;
-            }
-            const vmin = Math.min(...pts.map((p) => p[1]));
-            const vmax = Math.max(...pts.map((p) => p[1]));
-            const span = vmax - vmin || 1;
-            const tspan = end.getTime() - start.getTime();
-            const d = pts
-              .map(([t, v]) => `${(((t - start.getTime()) / tspan) * 100).toFixed(2)},${(38 - ((v - vmin) / span) * 36).toFixed(2)}`)
-              .join(" ");
-            svg.querySelector("polyline").setAttribute("points", d);
-            meta.children[0].textContent = `min ${vmin.toFixed(1)}`;
-            meta.children[1].textContent = `max ${vmax.toFixed(1)}`;
-          } catch (err) {
-            meta.children[0].textContent = "Verlauf nicht verfügbar";
-          }
-        };
-        load();
-        const timer = this._timer(load, 5 * 60 * 1000);
-        return {
-          el,
-          destroy: () => clearInterval(timer),
-          update: (hass) => {
-            const st = stateOf(hass);
-            headH.querySelector("span").textContent = nameOf(st);
-            const unit = (st && st.attributes && st.attributes.unit_of_measurement);
-            val.textContent = st ? `${st.state}${unit ? " " + unit : ""}` : "—";
-          },
-        };
-      }
-
-      case "clock": {
-        const time = h("div", { class: "clock-time" });
-        const date = h("div", { class: "clock-date" });
-        el.append(h("div", { class: "tl-head" }, icon(tile.icon || DEFAULT_ICON.clock), h("span", null, tile.name || "Uhr")), time, date);
-        const tick = () => {
-          const now = new Date();
-          const loc = (this._hass && this._hass.language) || navigator.language || "de-DE";
-          time.textContent = new Intl.DateTimeFormat(loc, { hour: "2-digit", minute: "2-digit" }).format(now);
-          date.textContent = new Intl.DateTimeFormat(loc, { weekday: "long", day: "numeric", month: "long" }).format(now);
-        };
-        tick();
-        const timer = this._timer(tick, 1000);
-        return { el, destroy: () => clearInterval(timer), update: () => {} };
-      }
-
-      case "text": {
-        el.append(h("div", { class: "tl-head" }, icon(tile.icon || DEFAULT_ICON.text), h("span", null, tile.name || "")), h("div", { class: "text-body" }, tile.text || ""));
-        return { el, update: () => {} };
-      }
-
-      case "web": {
-        el.classList.add("web");
-        el.dataset.noswipe = "1";
-        el.append(h("div", { class: "tl-head" }, icon(tile.icon || DEFAULT_ICON.web), h("span", null, tile.name || "")));
+      case "toggle": return this.tileToggle(tile, el, headOf, stateOf, nameOf, isEdit);
+      case "light": return this.tileLight(tile, el, headOf, stateOf, nameOf, isEdit);
+      case "sensor": return this.tileSensor(tile, el, headOf, stateOf, nameOf);
+      case "button": return this.tileButton(tile, el, headOf, stateOf, isEdit);
+      case "climate": return this.tileClimate(tile, el, headOf, stateOf, nameOf, isEdit);
+      case "cover": return this.tileCover(tile, el, headOf, stateOf, nameOf, isEdit);
+      case "camera": return this.tileCamera(tile, el, stateOf, nameOf);
+      case "history": return this.tileHistory(tile, el, headOf, stateOf, nameOf);
+      case "clock": return this.tileClock(tile, el);
+      case "text":
+        el.appendChild(h("div", { "class": "tl-head" }, icon(tile.icon || DEFAULT_ICON.text), h("span", null, tile.name || "")));
+        el.appendChild(h("div", { "class": "text-body" }, tile.text || ""));
+        return { el: el, update: function () {} };
+      case "web":
+        el.setAttribute("data-noswipe", "1");
+        el.appendChild(h("div", { "class": "tl-head" }, icon(tile.icon || DEFAULT_ICON.web), h("span", null, tile.name || "")));
         // Im Bearbeiten-Modus kein iframe, damit Tipps den Editor öffnen.
-        if (!isEdit()) {
-          el.append(h("iframe", { src: tile.url, sandbox: "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox", referrerpolicy: "no-referrer", loading: "lazy" }));
-        }
-        return { el, update: () => {} };
-      }
-
+        if (!isEdit()) el.appendChild(h("iframe", { src: tile.url, sandbox: "allow-scripts allow-forms allow-popups", referrerpolicy: "no-referrer" }));
+        return { el: el, update: function () {} };
       default:
-        el.append(h("div", { class: "tl-value" }, "Unbekannter Typ: " + tile.type));
-        return { el, update: () => {} };
+        el.appendChild(h("div", { "class": "tl-value" }, "Unbekannter Typ: " + tile.type));
+        return { el: el, update: function () {} };
     }
-  }
+  };
+
+  Tessella.prototype.tileToggle = function (tile, el, headOf, stateOf, nameOf, isEdit) {
+    var self = this;
+    var head = headOf("");
+    var label = h("div", { "class": "tl-value" });
+    el.appendChild(head);
+    el.appendChild(label);
+    el.addEventListener("click", function () {
+      if (isEdit() || !tile.entity) return;
+      haptic();
+      self.call("homeassistant", "toggle", { entity_id: tile.entity });
+    });
+    return {
+      el: el,
+      update: function (hass) {
+        var st = stateOf(hass);
+        head.querySelector("span").textContent = nameOf(st);
+        label.textContent = stateText(st);
+        setClass(el, "on", !!st && st.state === "on");
+        setClass(el, "unavail", !st || st.state === "unavailable");
+      }
+    };
+  };
+
+  Tessella.prototype.tileLight = function (tile, el, headOf, stateOf, nameOf, isEdit) {
+    var self = this;
+    el.setAttribute("data-noswipe", "1");
+    var bar = h("div", { "class": "bar" });
+    var labelHead = headOf("");
+    var pct = h("div", { "class": "pct" });
+    el.appendChild(bar);
+    el.appendChild(h("div", { "class": "lbl" }, labelHead, pct));
+    var drag = null;
+    var startPct = 0;
+    var lastSent = 0;
+    var lastOn = 100;
+
+    var curPct = function (st) {
+      if (!st || st.state !== "on") return 0;
+      if (st.attributes.brightness == null) return 100;
+      return Math.round((st.attributes.brightness / 255) * 100);
+    };
+    var setBar = function (p) {
+      bar.style.height = p + "%";
+      pct.textContent = p + " %";
+    };
+    var canDim = function (st) {
+      return !!st && st.attributes.brightness != null;
+    };
+
+    onPtr(el, "pointerdown", function (e) {
+      if (isEdit() || !tile.entity) return;
+      var st = stateOf(self.hass);
+      try {
+        if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      } catch (err) { /* Zeiger nicht aktiv */ }
+      startPct = curPct(st);
+      drag = { id: e.pointerId, y0: e.clientY, t0: Date.now(), moved: false, pct: startPct, h: el.clientHeight || 1, canDim: canDim(st) };
+    });
+    onPtr(el, "pointermove", function (e) {
+      if (!drag || drag.id !== e.pointerId || !drag.canDim) return;
+      var dy = drag.y0 - e.clientY;
+      if (!drag.moved && Math.abs(dy) < 8) return;
+      if (!drag.moved) setClass(el, "dragging", true);
+      drag.moved = true;
+      var p = clamp(Math.round(startPct + (dy / drag.h) * 100), 1, 100);
+      drag.pct = p;
+      setBar(p);
+      var now = Date.now();
+      if (now - lastSent > 150) {
+        lastSent = now;
+        self.call("light", "turn_on", { entity_id: tile.entity, brightness_pct: p });
+      }
+    });
+    var end = function (e, cancelled) {
+      if (!drag || drag.id !== e.pointerId) return;
+      var d = drag;
+      drag = null;
+      setClass(el, "dragging", false);
+      if (cancelled || !tile.entity) return;
+      var st = stateOf(self.hass);
+      if (d.moved && d.canDim) {
+        lastOn = d.pct;
+        self.call("light", "turn_on", { entity_id: tile.entity, brightness_pct: d.pct });
+      } else if (!d.moved && Date.now() - d.t0 < 450) {
+        haptic();
+        if (st && st.state === "on") {
+          lastOn = curPct(st) || lastOn;
+          self.call("light", "turn_off", { entity_id: tile.entity });
+        } else {
+          self.call("light", "turn_on", d.canDim ? { entity_id: tile.entity, brightness_pct: lastOn } : { entity_id: tile.entity });
+        }
+      }
+    };
+    onPtr(el, "pointerup", function (e) { end(e, false); });
+    onPtr(el, "pointercancel", function (e) { end(e, true); });
+
+    return {
+      el: el,
+      update: function (hass) {
+        var st = stateOf(hass);
+        replaceKids(labelHead, icon(tile.icon || DEFAULT_ICON.light), h("span", null, nameOf(st)));
+        setClass(el, "on", !!st && st.state === "on");
+        setClass(el, "unavail", !st || st.state === "unavailable");
+        if (!drag || !drag.moved) {
+          var p = curPct(st);
+          setBar(p);
+          if (st && st.state === "on") lastOn = p || lastOn;
+        }
+      }
+    };
+  };
+
+  Tessella.prototype.tileSensor = function (tile, el, headOf, stateOf, nameOf) {
+    var head = headOf("");
+    var val = h("div", { "class": "tl-value" });
+    el.appendChild(head);
+    el.appendChild(val);
+    return {
+      el: el,
+      update: function (hass) {
+        var st = stateOf(hass);
+        head.querySelector("span").textContent = nameOf(st);
+        var unit = st && st.attributes && st.attributes.unit_of_measurement;
+        val.textContent = st ? st.state + (unit ? " " + unit : "") : "—";
+        setClass(el, "unavail", !st || st.state === "unavailable");
+      }
+    };
+  };
+
+  Tessella.prototype.tileButton = function (tile, el, headOf, stateOf, isEdit) {
+    var self = this;
+    var head = headOf("");
+    var val = h("div", { "class": "tl-value" });
+    el.appendChild(head);
+    el.appendChild(val);
+    el.addEventListener("click", function () {
+      if (isEdit() || !tile.service) return;
+      var parts = tile.service.split(".");
+      var data = copyObj(tile.data || {});
+      if (tile.entity) data.entity_id = tile.entity;
+      haptic();
+      setClass(el, "flash", true);
+      setTimeout(function () { setClass(el, "flash", false); }, 300);
+      self.call(parts[0], parts[1], data);
+    });
+    return {
+      el: el,
+      update: function (hass) {
+        var st = stateOf(hass);
+        head.querySelector("span").textContent = tile.name || TYPES.button;
+        val.textContent = st ? stateText(st) : "";
+      }
+    };
+  };
+
+  Tessella.prototype.tileClimate = function (tile, el, headOf, stateOf, nameOf, isEdit) {
+    var self = this;
+    el.setAttribute("data-noswipe", "1");
+    var cur = h("div", { "class": "big" });
+    var target = h("div", { "class": "big" });
+    var head = headOf("");
+    var pending = null;
+    var timer = null;
+    var send = function (value) {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        self.call("climate", "set_temperature", { entity_id: tile.entity, temperature: value });
+        pending = null;
+      }, 700);
+    };
+    var step = function (dir, st) {
+      if (isEdit() || !st) return;
+      var s = numberOr(st.attributes.target_temp_step, 0.5);
+      var base = pending != null ? pending : numberOr(st.attributes.temperature, 20);
+      pending = Math.round((base + dir * s) * 10) / 10;
+      target.textContent = pending.toFixed(1) + "°";
+      send(pending);
+    };
+    var minus = h("button", { onclick: function () { step(-1, stateOf(self.hass)); } }, "−");
+    var plus = h("button", { onclick: function () { step(1, stateOf(self.hass)); } }, "+");
+    el.appendChild(head);
+    el.appendChild(h("div", { "class": "climate-row" }, cur, h("div", { "class": "stepper" }, minus, target, plus)));
+    return {
+      el: el,
+      update: function (hass) {
+        var st = stateOf(hass);
+        head.querySelector("span").textContent = nameOf(st);
+        var unit = (st && st.attributes && st.attributes.temperature_unit) || "°";
+        cur.textContent = st && st.attributes.current_temperature != null ? st.attributes.current_temperature + unit : stateText(st);
+        if (pending == null) target.textContent = st && st.attributes.temperature != null ? st.attributes.temperature + unit : "—";
+        minus.disabled = !st;
+        plus.disabled = !st;
+      }
+    };
+  };
+
+  Tessella.prototype.tileCover = function (tile, el, headOf, stateOf, nameOf, isEdit) {
+    var self = this;
+    var head = headOf("");
+    var val = h("div", { "class": "tl-value", style: { fontSize: "1rem" } });
+    var act = function (service) {
+      if (isEdit() || !tile.entity) return;
+      haptic();
+      self.call("cover", service, { entity_id: tile.entity });
+    };
+    var btn = function (ico, service) {
+      return h("button", { onclick: function () { act(service); } }, icon(ico));
+    };
+    el.appendChild(head);
+    el.appendChild(val);
+    el.appendChild(h("div", { "class": "cover-row" }, btn("mdi:arrow-up", "open_cover"), btn("mdi:stop", "stop_cover"), btn("mdi:arrow-down", "close_cover")));
+    return {
+      el: el,
+      update: function (hass) {
+        var st = stateOf(hass);
+        head.querySelector("span").textContent = nameOf(st);
+        var pos = st && st.attributes ? st.attributes.current_position : null;
+        val.textContent = pos != null ? stateText(st) + " · " + pos + " %" : stateText(st);
+      }
+    };
+  };
+
+  Tessella.prototype.tileCamera = function (tile, el, stateOf, nameOf) {
+    var self = this;
+    el.setAttribute("data-noswipe", "1");
+    setClass(el, "camera", true);
+    var img = h("img", { alt: "" });
+    var label = h("div", { "class": "cam-lbl" });
+    el.appendChild(img);
+    el.appendChild(label);
+    var base = "";
+    var refresh = function () {
+      if (!base) return;
+      img.src = base.indexOf("data:") === 0 ? base : base + (base.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+    };
+    var timerId = this.timer(refresh, 15000);
+    return {
+      el: el,
+      destroy: function () { clearInterval(timerId); },
+      update: function (hass) {
+        var st = stateOf(hass);
+        label.textContent = nameOf(st);
+        var pic = st && st.attributes ? st.attributes.entity_picture : null;
+        if (pic && pic !== base) {
+          base = pic;
+          refresh();
+        }
+      }
+    };
+  };
+
+  Tessella.prototype.tileHistory = function (tile, el, headOf, stateOf, nameOf) {
+    var self = this;
+    var val = h("div", { "class": "tl-value", style: { fontSize: "1.1rem" } });
+    var polyline = h("polyline", { points: "" });
+    var svg = h("svg", { "class": "spark", viewBox: "0 0 100 40", preserveAspectRatio: "none" }, polyline);
+    var metaMin = h("span", null, "");
+    var metaMax = h("span", null, "");
+    var meta = h("div", { "class": "spark-meta" }, metaMin, " ", metaMax);
+    var head = headOf("");
+    el.appendChild(head);
+    el.appendChild(val);
+    el.appendChild(svg);
+    el.appendChild(meta);
+    var load = function () {
+      if (!tile.entity || !self.hass) return;
+      var end = new Date();
+      var start = new Date(end.getTime() - 24 * 3600 * 1000);
+      self.hass.callWS({
+        type: "history/history_during_period",
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        entity_ids: [tile.entity],
+        minimal_response: true,
+        no_attributes: true
+      }).then(function (res) {
+        var rows = (res && res[tile.entity]) || [];
+        var pts = [];
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          var v = parseFloat(r.state != null ? r.state : r.s);
+          var t = r.lu ? r.lu * 1000 : Date.parse(r.last_updated || r.last_changed);
+          if (isFinite(v) && isFinite(t)) pts.push([t, v]);
+        }
+        if (pts.length < 2) {
+          polyline.setAttribute("points", "");
+          metaMin.textContent = "zu wenig Daten";
+          metaMax.textContent = "";
+          return;
+        }
+        var vmin = Infinity;
+        var vmax = -Infinity;
+        for (var j = 0; j < pts.length; j++) {
+          vmin = Math.min(vmin, pts[j][1]);
+          vmax = Math.max(vmax, pts[j][1]);
+        }
+        var range = vmax - vmin || 1;
+        var tspan = end.getTime() - start.getTime();
+        var d = [];
+        for (var k = 0; k < pts.length; k++) {
+          var x = ((pts[k][0] - start.getTime()) / tspan) * 100;
+          var y = 38 - ((pts[k][1] - vmin) / range) * 36;
+          d.push(x.toFixed(2) + "," + y.toFixed(2));
+        }
+        polyline.setAttribute("points", d.join(" "));
+        metaMin.textContent = "min " + vmin.toFixed(1);
+        metaMax.textContent = "max " + vmax.toFixed(1);
+      }, function () {
+        metaMin.textContent = "Verlauf nicht verfügbar";
+        metaMax.textContent = "";
+      });
+    };
+    load();
+    var timerId = this.timer(load, 5 * 60 * 1000);
+    return {
+      el: el,
+      destroy: function () { clearInterval(timerId); },
+      update: function (hass) {
+        var st = stateOf(hass);
+        head.querySelector("span").textContent = nameOf(st);
+        var unit = st && st.attributes ? st.attributes.unit_of_measurement : null;
+        val.textContent = st ? st.state + (unit ? " " + unit : "") : "—";
+      }
+    };
+  };
+
+  Tessella.prototype.tileClock = function (tile, el) {
+    var time = h("div", { "class": "clock-time" });
+    var date = h("div", { "class": "clock-date" });
+    el.appendChild(h("div", { "class": "tl-head" }, icon(tile.icon || DEFAULT_ICON.clock), h("span", null, tile.name || "Uhr")));
+    el.appendChild(time);
+    el.appendChild(date);
+    var self = this;
+    var tick = function () {
+      var now = new Date();
+      var loc = (self.hass && self.hass.language) || navigator.language || "de-DE";
+      var hasIntl = typeof Intl !== "undefined" && Intl.DateTimeFormat;
+      if (hasIntl) {
+        time.textContent = new Intl.DateTimeFormat(loc, { hour: "2-digit", minute: "2-digit" }).format(now);
+        date.textContent = new Intl.DateTimeFormat(loc, { weekday: "long", day: "numeric", month: "long" }).format(now);
+      } else {
+        var mm = now.getMinutes();
+        time.textContent = (now.getHours() < 10 ? "0" : "") + now.getHours() + ":" + (mm < 10 ? "0" : "") + mm;
+      }
+    };
+    tick();
+    var timerId = this.timer(tick, 1000);
+    return { el: el, destroy: function () { clearInterval(timerId); }, update: function () {} };
+  };
 
   // ---------- Seitenwechsel per Wischen ----------
 
-  _swipeStart(e) {
-    if (this._edit && e.target.closest(".tile")) return;
-    if (e.composedPath().some((n) => n.dataset && n.dataset.noswipe)) {
-      this._swipe = null;
-      return;
+  Tessella.prototype.swipeStart = function (e) {
+    if (this.edit && findUp(e.target, function (n) { return hasClass(n, "tile"); })) return;
+    var path = pathOf(e);
+    for (var i = 0; i < path.length; i++) {
+      var n = path[i];
+      if (n && n.getAttribute && n.getAttribute("data-noswipe")) {
+        this.swipe = null;
+        return;
+      }
     }
-    this._swipe = { x: e.clientX, y: e.clientY, t: Date.now() };
-  }
+    this.swipe = { x: e.clientX, y: e.clientY, t: Date.now() };
+  };
 
-  _swipeEnd(e) {
-    const s = this._swipe;
-    this._swipe = null;
+  Tessella.prototype.swipeEnd = function (e) {
+    var s = this.swipe;
+    this.swipe = null;
     if (!s) return;
-    const dx = e.clientX - s.x;
-    const dy = e.clientY - s.y;
+    var dx = e.clientX - s.x;
+    var dy = e.clientY - s.y;
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    const pages = this._pages();
-    if (dx < 0 && this._pageIdx < pages.length - 1) this._gotoPage(this._pageIdx + 1);
-    if (dx > 0 && this._pageIdx > 0) this._gotoPage(this._pageIdx - 1);
-  }
+    var pages = this.pages();
+    if (dx < 0 && this.pageIdx < pages.length - 1) this.gotoPage(this.pageIdx + 1);
+    if (dx > 0 && this.pageIdx > 0) this.gotoPage(this.pageIdx - 1);
+  };
 
   // ---------- Bearbeiten ----------
 
-  _toggleEdit() {
-    if (!(this._hass && this._hass.user && this._hass.user.is_admin)) return this._toast("Nur Administratoren können bearbeiten.");
-    this._edit = !this._edit;
-    this._refreshAdminVisibility();
-    this._renderAll();
-  }
+  Tessella.prototype.toggleEdit = function () {
+    if (!(this.hass && this.hass.user && this.hass.user.is_admin)) return this.toast("Nur Administratoren können bearbeiten.");
+    this.edit = !this.edit;
+    this.refreshAdminVisibility();
+    this.renderAll();
+  };
 
-  _newTile() {
-    const cols = this._page().columns;
-    this._openSheet(() => {
-      const types = Object.entries(TYPES).map(([type, label]) =>
-        h("button", {
-          class: "btn",
-          onclick: () => this._tileEditor({ id: uid("t"), type, name: "", icon: "", entity: "", w: 1, h: 1, cols }, true),
-        }, icon(DEFAULT_ICON[type]), " ", label)
-      );
-      return [h("h2", null, "Kachel-Typ wählen"), h("div", { class: "types" }, types)];
+  Tessella.prototype.newTile = function () {
+    var self = this;
+    var cols = this.page().columns;
+    this.openSheet(function () {
+      var buttons = [];
+      for (var i = 0; i < TYPE_ORDER.length; i++) {
+        (function (type) {
+          buttons.push(h("button", {
+            "class": "btn",
+            onclick: function () {
+              self.tileEditor({ id: uid("t"), type: type, name: "", icon: "", entity: "", w: 1, h: 1, cols: cols }, true);
+            }
+          }, icon(DEFAULT_ICON[type]), " ", TYPES[type]));
+        })(TYPE_ORDER[i]);
+      }
+      return [h("h2", null, "Kachel-Typ wählen"), h("div", { "class": "types" }, buttons)];
     });
-  }
+  };
 
-  _tileEditor(tile, isNew = false) {
-    const cols = this._page().columns;
-    const draft = { ...tile };
+  Tessella.prototype.tileEditor = function (tile, isNew) {
+    var self = this;
+    var cols = this.page().columns;
+    var draft = copyObj(tile);
     delete draft.cols;
-    const inputs = {};
-    const entityList = this._entityDatalist();
-    const needsEntity = (t) => NEEDS_ENTITY.includes(t) || t === "button";
+    var inputs = {};
+    var entityList = this.entityDatalist();
+    var needsEntity = function (t) { return includes(NEEDS_ENTITY, t) || t === "button"; };
 
-    const field = (label, control, hint) =>
-      h("div", { class: "row" }, h("label", null, label), control, hint ? h("div", { class: "hint" }, hint) : null);
-    const input = (key, props = {}) => {
-      const el = h("input", { value: draft[key] != null ? draft[key] : "", ...props });
+    var field = function (label, control, hint) {
+      return h("div", { "class": "row" }, h("label", null, label), control, hint ? h("div", { "class": "hint" }, hint) : null);
+    };
+    var input = function (key, props) {
+      var val = draft[key] != null ? draft[key] : "";
+      var el = h("input", copyObj(props || {}));
+      el.value = val;
       inputs[key] = el;
       return el;
     };
-    const select = (key, options, current) => {
-      const el = h(
-        "select",
-        null,
-        options.map(([v, l]) => h("option", { value: String(v), selected: String(v) === String(current) }, l))
-      );
+    var select = function (key, options, current) {
+      var opts = [];
+      for (var i = 0; i < options.length; i++) {
+        opts.push(h("option", { value: String(options[i][0]), selected: String(options[i][0]) === String(current) }, options[i][1]));
+      }
+      var el = h("select", null, opts);
       inputs[key] = el;
       return el;
     };
-    const textarea = (key, value, props = {}) => {
-      const el = h("textarea", props, value != null ? value : "");
+    var textarea = function (key, value, props) {
+      var el = h("textarea", props || {}, value != null ? value : "");
       inputs[key] = el;
       return el;
     };
 
     // Alle sichtbaren Felder in den Entwurf übernehmen. Wirft bei ungültigem JSON.
-    const collect = () => {
-      for (const [k, el] of Object.entries(inputs)) draft[k] = el.value;
+    var collect = function () {
+      for (var k in inputs) if (inputs.hasOwnProperty(k)) draft[k] = inputs[k].value;
       draft.w = Number(draft.w) || 1;
       draft.h = Number(draft.h) || 1;
       if (draft.type === "button") {
-        const raw = String(draft.data != null ? draft.data : "").trim();
+        var raw = String(draft.data != null ? draft.data : "").trim();
         if (!raw) draft.data = {};
         else {
           try {
             draft.data = JSON.parse(raw);
-          } catch (_) {
+          } catch (err) {
             throw new Error("Daten sind kein gültiges JSON.");
           }
         }
       }
     };
 
-    const dataText = () => (typeof draft.data === "string" ? draft.data : JSON.stringify(draft.data != null ? draft.data : {}, null, 2));
-
-    const build = () => {
-      for (const k of Object.keys(inputs)) delete inputs[k];
-      const type = draft.type;
-      const nodes = [
-        h("h2", null, isNew ? "Neue Kachel" : "Kachel bearbeiten"),
-        field("Typ", select("type", Object.entries(TYPES), type)),
-        field("Name", input("name", { placeholder: "leer = Entitätsname" })),
-        field("Symbol (mdi:…)", input("icon", { placeholder: DEFAULT_ICON[type] || "mdi:…" })),
-      ];
-      if (needsEntity(type)) {
-        nodes.push(
-          field(
-            type === "button" ? "Entität (optional)" : "Entität",
-            input("entity", { list: "tessella-entities", placeholder: "light.wohnzimmer", autocapitalize: "off", autocorrect: "off" }),
-            type === "light" ? "Ziehen = dimmen, Tippen = an/aus" : null
-          )
-        );
-      }
-      if (type === "button") {
-        nodes.push(field("Dienst", input("service", { placeholder: "script.gute_nacht", autocapitalize: "off" })));
-        nodes.push(field("Daten (JSON)", textarea("data", dataText(), { placeholder: "{}" })));
-      }
-      if (type === "text") nodes.push(field("Text", textarea("text", draft.text)));
-      if (type === "web") {
-        nodes.push(field("Adresse", input("url", { type: "url", placeholder: "https://…" }), "Viele Seiten erlauben kein Einbetten (iframe)."));
-      }
-      nodes.push(field("Breite (Spalten)", select("w", Array.from({ length: cols }, (_, i) => [i + 1, String(i + 1)]), draft.w || 1)));
-      nodes.push(field("Höhe (Reihen)", select("h", [1, 2, 3, 4, 5, 6].map((n) => [n, String(n)]), draft.h || 1)));
-      nodes.push(
-        h(
-          "div",
-          { class: "btns" },
-          h("button", { class: "btn primary", onclick: save }, "Speichern"),
-          h("button", { class: "btn", onclick: () => this._closeSheet() }, "Abbrechen")
-        )
-      );
-      if (!isNew) {
-        nodes.push(
-          h(
-            "div",
-            { class: "btns" },
-            h("button", { class: "btn", onclick: () => move(-1) }, "← früher"),
-            h("button", { class: "btn", onclick: () => move(1) }, "später →"),
-            h("button", { class: "btn danger", onclick: remove }, "Löschen")
-          )
-        );
-      }
-      nodes.push(entityList);
-      // Typwechsel: Eingaben sichern und Felder für den neuen Typ neu aufbauen.
-      inputs.type.addEventListener("change", () => {
-        try {
-          collect();
-        } catch (_) {
-          /* ungültiges JSON beim Typwechsel: Text bleibt erhalten */
-        }
-        this._openSheet(build);
-      });
-      return nodes;
+    var dataText = function () {
+      if (typeof draft.data === "string") return draft.data;
+      return JSON.stringify(draft.data != null ? draft.data : {}, null, 2);
     };
 
-    const save = () => {
+    var move = function (dir) {
+      self.mutate(function (d) {
+        var tiles = d.dashboards[self.dashId].pages[self.pageIdx].tiles;
+        var i = -1;
+        for (var k = 0; k < tiles.length; k++) if (tiles[k].id === tile.id) i = k;
+        var j = i + dir;
+        if (i >= 0 && j >= 0 && j < tiles.length) {
+          var tmp = tiles[i];
+          tiles[i] = tiles[j];
+          tiles[j] = tmp;
+        }
+      });
+      self.closeSheet();
+    };
+
+    var remove = function () {
+      if (!confirm("Kachel wirklich löschen?")) return;
+      self.mutate(function (d) {
+        var pg = d.dashboards[self.dashId].pages[self.pageIdx];
+        pg.tiles = pg.tiles.filter(function (t) { return t.id !== tile.id; });
+      });
+      self.closeSheet();
+    };
+
+    var save = function () {
       try {
         collect();
       } catch (err) {
-        return this._toast(err.message);
+        return self.toast(err.message);
       }
-      const clean = {
-        id: draft.id,
-        type: draft.type,
-        name: draft.name || "",
-        icon: draft.icon || "",
-        w: draft.w,
-        h: draft.h,
-      };
+      var clean = { id: draft.id, type: draft.type, name: draft.name || "", icon: draft.icon || "", w: draft.w, h: draft.h };
       if (needsEntity(draft.type) && draft.entity) clean.entity = draft.entity;
       if (draft.type === "button") {
         clean.service = draft.service || "";
@@ -990,250 +1202,370 @@ class TessellaPanel extends HTMLElement {
       }
       if (draft.type === "text") clean.text = draft.text || "";
       if (draft.type === "web") clean.url = draft.url || "";
-      this._mutate((d) => {
-        const pg = d.dashboards[this._dashId].pages[this._pageIdx];
-        const i = pg.tiles.findIndex((t) => t.id === clean.id);
-        if (i >= 0) pg.tiles[i] = clean;
+      self.mutate(function (d) {
+        var pg = d.dashboards[self.dashId].pages[self.pageIdx];
+        var found = -1;
+        for (var i = 0; i < pg.tiles.length; i++) if (pg.tiles[i].id === clean.id) found = i;
+        if (found >= 0) pg.tiles[found] = clean;
         else pg.tiles.push(clean);
       });
-      this._closeSheet();
+      self.closeSheet();
     };
 
-    const move = (dir) => {
-      this._mutate((d) => {
-        const tiles = d.dashboards[this._dashId].pages[this._pageIdx].tiles;
-        const i = tiles.findIndex((t) => t.id === tile.id);
-        const j = i + dir;
-        if (i >= 0 && j >= 0 && j < tiles.length) [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+    var build = function () {
+      inputs = {};
+      var type = draft.type;
+      var nodes = [
+        h("h2", null, isNew ? "Neue Kachel" : "Kachel bearbeiten"),
+        field("Typ", select("type", typeOptions(), type)),
+        field("Name", input("name", { placeholder: "leer = Entitätsname" })),
+        field("Symbol (mdi:…)", input("icon", { placeholder: DEFAULT_ICON[type] || "mdi:…" }))
+      ];
+      if (needsEntity(type)) {
+        nodes.push(field(
+          type === "button" ? "Entität (optional)" : "Entität",
+          input("entity", { list: "tessella-entities", placeholder: "light.wohnzimmer", autocapitalize: "off", autocorrect: "off" }),
+          type === "light" ? "Ziehen = dimmen, Tippen = an/aus" : null
+        ));
+      }
+      if (type === "button") {
+        nodes.push(field("Dienst", input("service", { placeholder: "script.gute_nacht", autocapitalize: "off" })));
+        nodes.push(field("Daten (JSON)", textarea("data", dataText(), { placeholder: "{}" })));
+      }
+      if (type === "text") nodes.push(field("Text", textarea("text", draft.text)));
+      if (type === "web") nodes.push(field("Adresse", input("url", { type: "url", placeholder: "https://…" }), "Viele Seiten erlauben kein Einbetten (iframe)."));
+      var widths = [];
+      for (var i = 1; i <= cols; i++) widths.push([i, String(i)]);
+      nodes.push(field("Breite (Spalten)", select("w", widths, draft.w || 1)));
+      nodes.push(field("Höhe (Reihen)", select("h", [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6"]], draft.h || 1)));
+      nodes.push(h("div", { "class": "btns" },
+        h("button", { "class": "btn primary", onclick: save }, "Speichern"),
+        h("button", { "class": "btn", onclick: function () { self.closeSheet(); } }, "Abbrechen")
+      ));
+      if (!isNew) {
+        nodes.push(h("div", { "class": "btns" },
+          h("button", { "class": "btn", onclick: function () { move(-1); } }, "← früher"),
+          h("button", { "class": "btn", onclick: function () { move(1); } }, "später →"),
+          h("button", { "class": "btn danger", onclick: remove }, "Löschen")
+        ));
+      }
+      nodes.push(entityList);
+      // Typwechsel: Eingaben sichern und Felder für den neuen Typ neu aufbauen.
+      inputs.type.addEventListener("change", function () {
+        try {
+          collect();
+        } catch (err) { /* ungültiges JSON beim Typwechsel: Text bleibt erhalten */ }
+        self.openSheet(build);
       });
-      this._closeSheet();
+      return nodes;
     };
 
-    const remove = () => {
-      if (!confirm("Kachel wirklich löschen?")) return;
-      this._mutate((d) => {
-        const pg = d.dashboards[this._dashId].pages[this._pageIdx];
-        pg.tiles = pg.tiles.filter((t) => t.id !== tile.id);
-      });
-      this._closeSheet();
-    };
+    this.openSheet(build);
+  };
 
-    this._openSheet(build);
+  function typeOptions() {
+    var out = [];
+    for (var i = 0; i < TYPE_ORDER.length; i++) out.push([TYPE_ORDER[i], TYPES[TYPE_ORDER[i]]]);
+    return out;
   }
 
-  _entityDatalist() {
-    const states = (this._hass && this._hass.states) || {};
-    const opts = Object.keys(states)
-      .sort()
-      .map((id) => h("option", { value: id }, (states[id] && states[id].attributes && states[id].attributes.friendly_name) || ""));
+  Tessella.prototype.entityDatalist = function () {
+    var states = (this.hass && this.hass.states) || {};
+    var ids = keysOf(states).sort();
+    var opts = [];
+    for (var i = 0; i < ids.length; i++) {
+      var st = states[ids[i]];
+      opts.push(h("option", { value: ids[i] }, (st && st.attributes && st.attributes.friendly_name) || ""));
+    }
     return h("datalist", { id: "tessella-entities" }, opts);
-  }
+  };
 
   // ---------- Menü ----------
 
-  _openMenu() {
-    if (!this._data) return;
-    const isAdmin = !!(this._hass && this._hass.user && this._hass.user.is_admin);
-    const dashes = Object.entries(this._data.dashboards).map(([id, d]) =>
-      h("button", {
-        class: "btn list-item" + (id === this._dashId ? " current" : ""),
-        onclick: () => {
-          this._dashId = id;
-          localStorage.setItem("tessella.dashboard", id);
-          this._pageIdx = 0;
-          this._closeSheet();
-          this._renderAll();
-        },
-      }, icon("mdi:view-dashboard"), " ", d.title)
-    );
-    const items = [h("h2", null, "Dashboards"), ...dashes];
-    if (isAdmin && this._edit) {
-      items.push(
-        h("div", { class: "btns" },
-          h("button", { class: "btn", onclick: () => this._newDashboard() }, "+ Dashboard"),
-          h("button", { class: "btn", onclick: () => this._renameDashboard() }, "Titel ändern"),
-          h("button", { class: "btn danger", onclick: () => this._deleteDashboard() }, "Dashboard löschen")
-        )
-      );
-      const page = this._page();
-      items.push(h("h2", null, "Seite: " + page.title));
-      items.push(
-        h("div", { class: "row" }, h("label", null, "Spalten (Tablet / Smartphone)"),
-          h("select", {
-            onchange: (e) => this._mutate((d) => { d.dashboards[this._dashId].pages[this._pageIdx].columns = Number(e.target.value); }),
-          }, [2, 3, 4, 5, 6].map((n) => h("option", { value: n, selected: n === page.columns }, String(n)))))
-      );
-      items.push(
-        h("div", { class: "btns" },
-          h("button", { class: "btn", onclick: () => this._renamePage() }, "Seite umbenennen"),
-          h("button", { class: "btn", onclick: () => this._addPage() }, "+ Seite"),
-          h("button", { class: "btn danger", onclick: () => this._deletePage() }, "Seite löschen")
-        )
-      );
-      items.push(h("h2", null, "Export / Import"));
-      items.push(
-        h("div", { class: "btns" },
-          h("button", { class: "btn", onclick: () => this._exportDashboard() }, "Exportieren"),
-          h("button", { class: "btn", onclick: () => this._importDashboard() }, "Importieren")
-        )
-      );
+  Tessella.prototype.openMenu = function () {
+    var self = this;
+    if (!this.data) return;
+    var isAdmin = !!(this.hass && this.hass.user && this.hass.user.is_admin);
+    var items = [h("h2", null, "Dashboards")];
+    var ids = keysOf(this.data.dashboards);
+    for (var i = 0; i < ids.length; i++) {
+      (function (id) {
+        items.push(h("button", {
+          "class": "btn list-item" + (id === self.dashId ? " current" : ""),
+          onclick: function () {
+            self.dashId = id;
+            localStorage.setItem("tessella.dashboard", id);
+            self.pageIdx = 0;
+            self.closeSheet();
+            self.renderAll();
+          }
+        }, icon("mdi:view-dashboard"), " ", self.data.dashboards[id].title));
+      })(ids[i]);
     }
-    items.push(
-      h("h2", null, "Anzeige"),
-      h("div", { class: "btns" },
-        h("button", { class: "btn", onclick: () => { this._setWake(!this._wantWake()); this._closeSheet(); } }, this._wantWake() ? "Wach halten: an" : "Wach halten: aus"),
-        h("button", { class: "btn", onclick: () => { this._toggleFullscreen(); this._closeSheet(); } }, "Vollbild")
-      )
-    );
-    this._openSheet(() => items);
-  }
+    if (isAdmin && this.edit) {
+      items.push(h("div", { "class": "btns" },
+        h("button", { "class": "btn", onclick: function () { self.newDashboard(); } }, "+ Dashboard"),
+        h("button", { "class": "btn", onclick: function () { self.renameDashboard(); } }, "Titel ändern"),
+        h("button", { "class": "btn danger", onclick: function () { self.deleteDashboard(); } }, "Dashboard löschen")
+      ));
+      var page = this.page();
+      items.push(h("h2", null, "Seite: " + page.title));
+      var colOpts = [];
+      var choices = [2, 3, 4, 5, 6];
+      for (var c = 0; c < choices.length; c++) colOpts.push(h("option", { value: choices[c], selected: choices[c] === page.columns }, String(choices[c])));
+      items.push(h("div", { "class": "row" }, h("label", null, "Spalten (Tablet / Smartphone)"),
+        h("select", {
+          onchange: function (e) {
+            var v = Number(e.target.value);
+            self.mutate(function (d) { d.dashboards[self.dashId].pages[self.pageIdx].columns = v; });
+          }
+        }, colOpts)));
+      items.push(h("div", { "class": "btns" },
+        h("button", { "class": "btn", onclick: function () { self.renamePage(); } }, "Seite umbenennen"),
+        h("button", { "class": "btn", onclick: function () { self.addPage(); } }, "+ Seite"),
+        h("button", { "class": "btn danger", onclick: function () { self.deletePage(); } }, "Seite löschen")
+      ));
+      items.push(h("h2", null, "Export / Import"));
+      items.push(h("div", { "class": "btns" },
+        h("button", { "class": "btn", onclick: function () { self.exportDashboard(); } }, "Exportieren"),
+        h("button", { "class": "btn", onclick: function () { self.importDashboard(); } }, "Importieren")
+      ));
+    }
+    items.push(h("h2", null, "Anzeige"));
+    items.push(h("div", { "class": "btns" },
+      h("button", { "class": "btn", onclick: function () { self.setWake(!self.wantWake()); self.closeSheet(); } }, self.wantWake() ? "Wach halten: an" : "Wach halten: aus"),
+      h("button", { "class": "btn", onclick: function () { self.toggleFullscreen(); self.closeSheet(); } }, "Vollbild")
+    ));
+    this.openSheet(function () { return items; });
+  };
 
-  _newDashboard() {
-    const name = prompt("Name des neuen Dashboards:");
+  Tessella.prototype.newDashboard = function () {
+    var name = prompt("Name des neuen Dashboards:");
     if (!name || !name.trim()) return;
-    const id = uid("d");
-    this._dashId = id;
-    this._pageIdx = 0;
+    var id = uid("d");
+    this.dashId = id;
+    this.pageIdx = 0;
     localStorage.setItem("tessella.dashboard", id);
-    this._mutate((d) => {
+    this.mutate(function (d) {
       d.dashboards[id] = { title: name.trim().slice(0, 60), pages: [{ id: uid("p"), title: "Start", columns: 3, tiles: [] }] };
     });
-    this._closeSheet();
-  }
+    this.closeSheet();
+  };
 
-  _renameDashboard() {
-    const name = prompt("Neuer Titel:", this._dash().title);
+  Tessella.prototype.renameDashboard = function () {
+    var name = prompt("Neuer Titel:", this.dash().title);
     if (!name || !name.trim()) return;
-    this._mutate((d) => { d.dashboards[this._dashId].title = name.trim().slice(0, 60); });
-    this._closeSheet();
-  }
+    var id = this.dashId;
+    this.mutate(function (d) { d.dashboards[id].title = name.trim().slice(0, 60); });
+    this.closeSheet();
+  };
 
-  _deleteDashboard() {
-    if (Object.keys(this._data.dashboards).length <= 1) return this._toast("Das letzte Dashboard kann nicht gelöscht werden.");
-    if (!confirm(`Dashboard „${this._dash().title}“ wirklich löschen?`)) return;
-    const doomed = this._dashId;
-    this._dashId = Object.keys(this._data.dashboards).find((id) => id !== doomed);
-    this._pageIdx = 0;
-    localStorage.setItem("tessella.dashboard", this._dashId);
-    this._mutate((d) => { delete d.dashboards[doomed]; });
-    this._closeSheet();
-  }
+  Tessella.prototype.deleteDashboard = function () {
+    var self = this;
+    if (keysOf(this.data.dashboards).length <= 1) return this.toast("Das letzte Dashboard kann nicht gelöscht werden.");
+    if (!confirm("Dashboard „" + this.dash().title + "“ wirklich löschen?")) return;
+    var doomed = this.dashId;
+    var ids = keysOf(this.data.dashboards);
+    for (var i = 0; i < ids.length; i++) {
+      if (ids[i] !== doomed) {
+        this.dashId = ids[i];
+        break;
+      }
+    }
+    this.pageIdx = 0;
+    localStorage.setItem("tessella.dashboard", this.dashId);
+    this.mutate(function (d) { delete d.dashboards[doomed]; });
+    this.closeSheet();
+    void self;
+  };
 
-  _addPage() {
-    const name = prompt("Name der neuen Seite:", "Seite " + (this._pages().length + 1));
+  Tessella.prototype.addPage = function () {
+    var name = prompt("Name der neuen Seite:", "Seite " + (this.pages().length + 1));
     if (!name || !name.trim()) return;
-    this._mutate((d) => {
-      d.dashboards[this._dashId].pages.push({ id: uid("p"), title: name.trim().slice(0, 40), columns: 3, tiles: [] });
+    var id = this.dashId;
+    this.mutate(function (d) {
+      d.dashboards[id].pages.push({ id: uid("p"), title: name.trim().slice(0, 40), columns: 3, tiles: [] });
     });
-    this._pageIdx = this._pages().length - 1;
-    this._closeSheet();
-    this._renderAll();
-  }
+    this.pageIdx = this.pages().length - 1;
+    this.closeSheet();
+    this.renderAll();
+  };
 
-  _renamePage() {
-    const name = prompt("Neuer Seitenname:", this._page().title);
+  Tessella.prototype.renamePage = function () {
+    var name = prompt("Neuer Seitenname:", this.page().title);
     if (!name || !name.trim()) return;
-    this._mutate((d) => { d.dashboards[this._dashId].pages[this._pageIdx].title = name.trim().slice(0, 40); });
-    this._closeSheet();
-  }
+    var id = this.dashId;
+    var idx = this.pageIdx;
+    this.mutate(function (d) { d.dashboards[id].pages[idx].title = name.trim().slice(0, 40); });
+    this.closeSheet();
+  };
 
-  _deletePage() {
-    if (this._pages().length <= 1) return this._toast("Die letzte Seite kann nicht gelöscht werden.");
-    if (!confirm(`Seite „${this._page().title}“ mit allen Kacheln löschen?`)) return;
-    const doomedIdx = this._pageIdx;
-    this._pageIdx = Math.max(0, doomedIdx - 1);
-    this._mutate((d) => { d.dashboards[this._dashId].pages.splice(doomedIdx, 1); });
-    this._closeSheet();
-  }
+  Tessella.prototype.deletePage = function () {
+    if (this.pages().length <= 1) return this.toast("Die letzte Seite kann nicht gelöscht werden.");
+    if (!confirm("Seite „" + this.page().title + "“ mit allen Kacheln löschen?")) return;
+    var doomedIdx = this.pageIdx;
+    this.pageIdx = Math.max(0, doomedIdx - 1);
+    var id = this.dashId;
+    this.mutate(function (d) { d.dashboards[id].pages.splice(doomedIdx, 1); });
+    this.closeSheet();
+  };
 
-  _exportDashboard() {
-    const text = JSON.stringify(this._dash(), null, 2);
-    const copy = navigator.clipboard ? navigator.clipboard.writeText(text) : null;
-    if (copy) copy.then(() => this._toast("In die Zwischenablage kopiert")).catch(() => this._showExport(text));
-    else this._showExport(text);
-  }
+  Tessella.prototype.exportDashboard = function () {
+    var text = JSON.stringify(this.dash(), null, 2);
+    var self = this;
+    var cb = navigator.clipboard;
+    if (cb && cb.writeText) {
+      cb.writeText(text).then(function () {
+        self.toast("In die Zwischenablage kopiert");
+      }, function () {
+        self.showExport(text);
+      });
+    } else {
+      this.showExport(text);
+    }
+  };
 
-  _showExport(text) {
-    this._openSheet(() => [
-      h("h2", null, "Export"),
-      h("textarea", { readonly: true, style: { minHeight: "240px" } }, text),
-    ]);
-  }
+  Tessella.prototype.showExport = function (text) {
+    this.openSheet(function () {
+      return [h("h2", null, "Export"), h("textarea", { readonly: true, style: { minHeight: "240px" } }, text)];
+    });
+  };
 
-  _importDashboard() {
-    let area;
-    this._openSheet(() => [
-      h("h2", null, "Import"),
-      h("div", { class: "hint" }, "Dashboard-JSON einfügen. Es ersetzt das aktuelle Dashboard."),
-      (area = h("textarea", { placeholder: "{ … }" })),
-      h("div", { class: "btns" },
-        h("button", { class: "btn primary", onclick: () => {
-          let parsed;
-          try { parsed = JSON.parse(area.value); } catch (_) { return this._toast("Kein gültiges JSON."); }
-          if (!parsed || !Array.isArray(parsed.pages)) return this._toast("Das ist kein Tessella-Dashboard.");
-          this._mutate((d) => { d.dashboards[this._dashId] = parsed; });
-          this._pageIdx = 0;
-          this._closeSheet();
-        } }, "Übernehmen")
-      ),
-    ]);
-  }
+  Tessella.prototype.importDashboard = function () {
+    var self = this;
+    var area;
+    this.openSheet(function () {
+      return [
+        h("h2", null, "Import"),
+        h("div", { "class": "hint" }, "Dashboard-JSON einfügen. Es ersetzt das aktuelle Dashboard."),
+        (area = h("textarea", { placeholder: "{ … }" })),
+        h("div", { "class": "btns" },
+          h("button", {
+            "class": "btn primary",
+            onclick: function () {
+              var parsed;
+              try {
+                parsed = JSON.parse(area.value);
+              } catch (err) {
+                return self.toast("Kein gültiges JSON.");
+              }
+              if (!parsed || !parsed.pages || parsed.pages.length === undefined) return self.toast("Das ist kein Tessella-Dashboard.");
+              var id = self.dashId;
+              self.mutate(function (d) { d.dashboards[id] = parsed; });
+              self.pageIdx = 0;
+              self.closeSheet();
+            }
+          }, "Übernehmen")
+        )
+      ];
+    });
+  };
 
   // ---------- Sheets, Toast, Vollbild, Wachhalten ----------
 
-  _openSheet(build) {
-    replaceKids(this._sheetEl, ...build());
-    this._sheetBack.hidden = false;
-  }
+  Tessella.prototype.openSheet = function (build) {
+    replaceKids(this.sheetEl, build());
+    this.sheetBack.hidden = false;
+  };
 
-  _closeSheet() {
-    this._sheetBack.hidden = true;
-    replaceKids(this._sheetEl, );
-  }
+  Tessella.prototype.closeSheet = function () {
+    this.sheetBack.hidden = true;
+    replaceKids(this.sheetEl);
+  };
 
-  _toast(text) {
-    this._toastEl.textContent = text;
-    this._toastEl.hidden = false;
-    clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => (this._toastEl.hidden = true), 3200);
-  }
+  Tessella.prototype.toast = function (text) {
+    var self = this;
+    this.toastEl.textContent = text;
+    this.toastEl.hidden = false;
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(function () { self.toastEl.hidden = true; }, 3200);
+  };
 
-  _toggleFullscreen() {
+  Tessella.prototype.toggleFullscreen = function () {
     try {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else document.documentElement.requestFullscreen();
-    } catch (_) {
-      this._toast("Vollbild wird von diesem Browser nicht unterstützt.");
-    }
-  }
-
-  _wantWakeFromStorage() {
-    if (this._wantWake()) this._setWake(true, true);
-  }
-
-  _setWakeButton() {
-    this._wakeBtn.classList.toggle("on", this._wantWake());
-  }
-
-  async _setWake(on, silent = false) {
-    try {
-      if (on) {
-        if (!("wakeLock" in navigator)) throw new Error("nicht verfügbar");
-        this._wakeLock = await navigator.wakeLock.request("screen");
-        localStorage.setItem("tessella.wake", "1");
+      var de = document.documentElement;
+      if (document.fullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+      } else if (de.requestFullscreen) {
+        de.requestFullscreen();
       } else {
-        if (this._wakeLock) await this._wakeLock.release();
-        this._wakeLock = null;
-        localStorage.setItem("tessella.wake", "0");
+        this.toast("Vollbild wird von diesem Browser nicht unterstützt.");
       }
     } catch (err) {
-      localStorage.setItem("tessella.wake", "0");
-      if (!silent) this._toast("Wach halten braucht HTTPS oder wird vom Browser nicht unterstützt.");
+      this.toast("Vollbild wird von diesem Browser nicht unterstützt.");
     }
-    this._setWakeButton();
-  }
-}
+  };
 
-if (!customElements.get("tessella-panel")) {
-  customElements.define("tessella-panel", TessellaPanel);
-}
+  Tessella.prototype.setWakeButton = function () {
+    setClass(this.wakeBtn, "on", this.wantWake());
+  };
+
+  Tessella.prototype.storeWake = function (value) {
+    try {
+      localStorage.setItem("tessella.wake", value);
+    } catch (e) { /* ignorieren */ }
+  };
+
+  Tessella.prototype.setWake = function (on, silent) {
+    var self = this;
+    if (on) {
+      if (!navigator.wakeLock || !navigator.wakeLock.request) {
+        this.storeWake("0");
+        if (!silent) this.toast("Wach halten wird von diesem Browser nicht unterstützt.");
+      } else {
+        navigator.wakeLock.request("screen").then(function (lock) {
+          self.wakeLock = lock;
+          self.storeWake("1");
+          self.setWakeButton();
+        }, function () {
+          self.storeWake("0");
+          if (!silent) self.toast("Wach halten braucht HTTPS oder wird vom Browser nicht unterstützt.");
+          self.setWakeButton();
+        });
+      }
+    } else {
+      var lock = this.wakeLock;
+      this.wakeLock = null;
+      this.storeWake("0");
+      if (lock && lock.release) {
+        var r = lock.release();
+        if (r && r.catch) r.catch(function () {});
+      }
+    }
+    this.setWakeButton();
+  };
+
+  // Veraltete Aufrufe aus dem HA-Panel, kompatibel halten
+  Tessella.prototype.refresh = function () {
+    this.renderAll();
+  };
+
+  global.Tessella = Tessella;
+
+  // ---------- HA-Panel (<tessella-panel>), nur mit Custom Elements ----------
+
+  if (global.customElements && global.Reflect && global.HTMLElement && global.HTMLElement.prototype.attachShadow) {
+    var PanelEl = function () {
+      var el = Reflect.construct(HTMLElement, [], PanelEl);
+      el.attachShadow({ mode: "open" });
+      el._core = new Tessella(el.shadowRoot, {});
+      return el;
+    };
+    PanelEl.prototype = Object.create(HTMLElement.prototype);
+    PanelEl.prototype.constructor = PanelEl;
+    PanelEl.prototype.connectedCallback = function () {
+      this._core.connected();
+    };
+    PanelEl.prototype.disconnectedCallback = function () {
+      this._core.disconnected();
+    };
+    Object.defineProperty(PanelEl.prototype, "hass", {
+      set: function (v) { this._core.setHass(v); },
+      get: function () { return this._core.hass; }
+    });
+    Object.setPrototypeOf(PanelEl, HTMLElement);
+    if (!global.customElements.get("tessella-panel")) {
+      global.customElements.define("tessella-panel", PanelEl);
+    }
+  }
+})(window);
