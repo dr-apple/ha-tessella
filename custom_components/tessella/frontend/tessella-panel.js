@@ -954,24 +954,87 @@
     };
   };
 
-  // Eine Zeile pro Licht in der Übersicht: Name, Wert, − und +
+  // Eine Zeile pro Licht in der Übersicht: Name, Wert, − , Regler und +
   Tessella.prototype.lightRow = function (eid) {
     var self = this;
     var name = h("span", { "class": "lr-name" });
     var val = h("span", { "class": "lr-val" });
+    var fill = h("div", { "class": "lfill" });
+    var knob = h("div", { "class": "lknob" });
+    var track = h("div", { "class": "ltrack" }, fill, knob);
     var level = 0;
-    var setLevel = function (p) {
-      p = Math.max(0, Math.min(100, Math.round(p)));
+    var busyUntil = 0;
+    var dragging = false;
+    var lastSend = 0;
+
+    var show = function (p) {
       level = p;
+      fill.style.width = p + "%";
+      knob.style.left = p + "%";
       val.textContent = p > 0 ? p + " %" : "Aus";
+    };
+    var send = function (p) {
       if (p <= 0) self.call("light", "turn_off", { entity_id: eid });
       else self.call("light", "turn_on", { entity_id: eid, brightness_pct: p });
     };
+    var setLevel = function (p) {
+      p = Math.max(0, Math.min(100, Math.round(p)));
+      busyUntil = Date.now() + 2000;
+      show(p);
+      send(p);
+    };
+    var levelFromX = function (x) {
+      var rect = track.getBoundingClientRect();
+      if (!rect.width) return level;
+      return Math.max(0, Math.min(100, Math.round(((x - rect.left) / rect.width) * 100)));
+    };
+    var xOf = function (e) {
+      var pt = e.changedTouches && e.changedTouches[0] ? e.changedTouches[0] : e;
+      return pt.clientX;
+    };
+    var onStart = function (e) {
+      dragging = true;
+      busyUntil = Date.now() + 2000;
+      if (e.stopPropagation) e.stopPropagation();
+      show(levelFromX(xOf(e)));
+    };
+    var onMove = function (e) {
+      if (!dragging) return;
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopPropagation) e.stopPropagation();
+      var p = levelFromX(xOf(e));
+      show(p);
+      busyUntil = Date.now() + 2000;
+      if (Date.now() - lastSend > 200) {
+        lastSend = Date.now();
+        send(p);
+      }
+    };
+    var onEnd = function () {
+      if (!dragging) return;
+      dragging = false;
+      send(level);
+    };
+    track.addEventListener("touchstart", onStart, false);
+    track.addEventListener("touchmove", onMove, false);
+    track.addEventListener("touchend", onEnd, false);
+    track.addEventListener("touchcancel", onEnd, false);
+    track.addEventListener("mousedown", function (e) {
+      onStart(e);
+      var up = function (ev) {
+        window.removeEventListener("mousemove", onMove, false);
+        window.removeEventListener("mouseup", up, false);
+        onEnd(ev);
+      };
+      window.addEventListener("mousemove", onMove, false);
+      window.addEventListener("mouseup", up, false);
+    }, false);
+
     var minus = h("button", { "class": "lbtn", onclick: function () { setLevel(level - 10); } }, "−");
     var plus = h("button", { "class": "lbtn", onclick: function () { setLevel(level + 10); } }, "+");
     var el = h("div", { "class": "lrow2" },
       h("div", { "class": "lr-head" }, name, val),
-      h("div", { "class": "lrow" }, minus, plus));
+      h("div", { "class": "lrow" }, minus, track, plus));
     return {
       el: el,
       update: function (hass) {
@@ -979,8 +1042,7 @@
         name.textContent = (st && st.attributes && st.attributes.friendly_name) || eid;
         var on = !!st && st.state === "on";
         var p = !on ? 0 : (st.attributes.brightness == null ? 100 : Math.round((st.attributes.brightness / 255) * 100));
-        level = p;
-        val.textContent = on ? p + " %" : "Aus";
+        if (!dragging && Date.now() > busyUntil) show(p);
       }
     };
   };
