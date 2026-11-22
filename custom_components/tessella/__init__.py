@@ -75,8 +75,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     async_register_panel(
         hass,
-        PANEL_ELEMENT,
         frontend_url_path=PANEL_URL,
+        webcomponent_name=PANEL_ELEMENT,
         module_url=MODULE_URL,
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
