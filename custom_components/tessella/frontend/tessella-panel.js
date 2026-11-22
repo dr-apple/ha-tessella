@@ -47,7 +47,24 @@
 
   var STATE_TEXT = { on: "An", off: "Aus", unavailable: "Nicht verfügbar", unknown: "Unbekannt" };
 
-  var ROW_H = 80;
+  // Kachelgröße und Spaltenzahl stellt jedes Gerät selbst ein (gespeichert im Browser)
+  var SIZES = { klein: 64, mittel: 80, gross: 110 };
+  function storedRowH() {
+    try {
+      var v = Number(localStorage.getItem("tessella.rowh"));
+      return v >= 50 && v <= 200 ? v : 80;
+    } catch (e) {
+      return 80;
+    }
+  }
+  function storedCols() {
+    try {
+      var v = Number(localStorage.getItem("tessella.cols"));
+      return v >= 1 && v <= 6 ? v : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
   var GAP = 10;
   var PAD = 12;
 
@@ -575,6 +592,8 @@
   };
 
   Tessella.prototype.cols = function () {
+    var forced = storedCols();
+    if (forced) return forced;
     var page = this.page();
     return this.mq.matches ? Math.min(page.columns, 2) : page.columns;
   };
@@ -655,17 +674,18 @@
     var width = this.gridEl.clientWidth || window.innerWidth || 320;
     var cell = (width - 2 * PAD - (cols - 1) * GAP) / cols;
     var pl = placeTiles(this.layoutItems, cols);
+    var rowH = storedRowH();
     for (var i = 0; i < pl.items.length; i++) {
       var p = pl.items[i];
       var el = this.layoutItems[i].el;
       el.style.left = (PAD + p.c * (cell + GAP)) + "px";
-      el.style.top = (PAD + p.r * (ROW_H + GAP)) + "px";
+      el.style.top = (PAD + p.r * (rowH + GAP)) + "px";
       el.style.width = (p.w * cell + (p.w - 1) * GAP) + "px";
-      el.style.height = (p.h * ROW_H + (p.h - 1) * GAP) + "px";
+      el.style.height = (p.h * rowH + (p.h - 1) * GAP) + "px";
       if (this.layoutItems[i].fit) this.layoutItems[i].fit();
     }
     var rows = Math.max(pl.rows, 1);
-    this.gridEl.style.height = (2 * PAD + rows * ROW_H + (rows - 1) * GAP) + "px";
+    this.gridEl.style.height = (2 * PAD + rows * rowH + (rows - 1) * GAP) + "px";
   };
 
   Tessella.prototype.clearTiles = function () {
@@ -1719,6 +1739,25 @@
         h("button", { "class": "btn", onclick: function () { self.importDashboard(); } }, "Importieren")
       ));
     }
+    var setDevice = function (key, value) {
+      try {
+        localStorage.setItem(key, String(value));
+      } catch (e) { /* ignorieren */ }
+      self.closeSheet();
+      self.renderAll();
+    };
+    items.push(h("h2", null, "Kachelgröße (dieses Gerät)"));
+    items.push(h("div", { "class": "btns" },
+      h("button", { "class": "btn", onclick: function () { setDevice("tessella.rowh", SIZES.klein); } }, "klein"),
+      h("button", { "class": "btn", onclick: function () { setDevice("tessella.rowh", SIZES.mittel); } }, "mittel"),
+      h("button", { "class": "btn", onclick: function () { setDevice("tessella.rowh", SIZES.gross); } }, "groß")));
+    items.push(h("h2", null, "Spalten (dieses Gerät)"));
+    items.push(h("div", { "class": "btns" },
+      h("button", { "class": "btn", onclick: function () { setDevice("tessella.cols", 0); } }, "automatisch"),
+      h("button", { "class": "btn", onclick: function () { setDevice("tessella.cols", 2); } }, "2"),
+      h("button", { "class": "btn", onclick: function () { setDevice("tessella.cols", 3); } }, "3"),
+      h("button", { "class": "btn", onclick: function () { setDevice("tessella.cols", 4); } }, "4"),
+      h("button", { "class": "btn", onclick: function () { setDevice("tessella.cols", 5); } }, "5")));
     items.push(h("h2", null, "Anzeige"));
     items.push(h("div", { "class": "btns" },
       h("button", { "class": "btn", onclick: function () { self.setWake(!self.wantWake()); self.closeSheet(); } }, self.wantWake() ? "Wach halten: an" : "Wach halten: aus"),
