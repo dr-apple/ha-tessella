@@ -944,12 +944,29 @@
     var label = h("div", { "class": "cam-lbl" });
     el.appendChild(img);
     el.appendChild(label);
+    // Live-Bild über den MJPEG-Strom von Home Assistant (camera_proxy_stream), das
+    // SecuritySpy und andere Kameras liefern. Schlägt das fehl, fällt die Kachel auf
+    // Standbilder alle 2 s zurück.
     var base = "";
-    var refresh = function () {
+    var streaming = true;
+    var snapshot = function () {
       if (!base) return;
       img.src = base.indexOf("data:") === 0 ? base : base + (base.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
     };
-    // Standbilder alle 2 s neu laden: ein nahezu live wirkendes Bild ohne Videostream.
+    var setStream = function () {
+      if (!base) return;
+      if (base.indexOf("data:") === 0) return snapshot();
+      img.src = base.replace("/api/camera_proxy/", "/api/camera_proxy_stream/");
+    };
+    img.onerror = function () {
+      if (streaming) {
+        streaming = false;
+        snapshot();
+      }
+    };
+    var refresh = function () {
+      if (!streaming) snapshot();
+    };
     var timerId = this.timer(refresh, 2000);
     return {
       el: el,
@@ -960,7 +977,8 @@
         var pic = st && st.attributes ? st.attributes.entity_picture : null;
         if (pic && pic !== base) {
           base = pic;
-          refresh();
+          if (streaming) setStream();
+          else snapshot();
         }
       }
     };
