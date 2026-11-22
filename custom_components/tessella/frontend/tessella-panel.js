@@ -134,7 +134,13 @@
     ".toast { position: fixed; left: 10%; right: 10%; bottom: 24px; z-index: 30; background: #333; color: #fff; padding: 10px 16px; border-radius: 12px;",
     "         font-size: .9rem; text-align: center; }",
     ".toast[hidden] { display: none; }",
-    ".readonly .edit-only { display: none; }"
+    ".readonly .edit-only { display: none; }",
+    ".ico { display: inline-block; width: 0; }",
+    ".tile.on .tl-head { color: #fff; }",
+    ".climate-row .big { font-size: 1.4rem; }",
+    ".stepper button { width: 34px; height: 34px; font-size: 1.1rem; }",
+    ".cover-row button { height: 34px; font-size: 1rem; }",
+    ".tile.climate, .tile.cover { padding: 8px 10px; }"
   ].join("\n");
 
   // ---------- Hilfsfunktionen ----------
@@ -204,8 +210,14 @@
     return el;
   }
 
+  // Icons nur, wenn das HA-Frontend das Element ha-icon bereitstellt (auf der eigenständigen Seite nicht).
+  function hasHaIcon() {
+    return !!(window.customElements && window.customElements.get && window.customElements.get("ha-icon"));
+  }
+
   function icon(name, cls) {
-    return h("ha-icon", { icon: name, "class": cls || "" });
+    if (hasHaIcon()) return h("ha-icon", { icon: name, "class": cls || "" });
+    return h("span", { "class": "ico" });
   }
 
   function replaceKids(el) {
@@ -907,12 +919,12 @@
       haptic();
       self.call("cover", service, { entity_id: tile.entity });
     };
-    var btn = function (ico, service) {
-      return h("button", { onclick: function () { act(service); } }, icon(ico));
+    var btn = function (ico, service, txt) {
+      return h("button", { onclick: function () { act(service); } }, hasHaIcon() ? icon(ico) : txt);
     };
     el.appendChild(head);
     el.appendChild(val);
-    el.appendChild(h("div", { "class": "cover-row" }, btn("mdi:arrow-up", "open_cover"), btn("mdi:stop", "stop_cover"), btn("mdi:arrow-down", "close_cover")));
+    el.appendChild(h("div", { "class": "cover-row" }, btn("mdi:arrow-up", "open_cover", "▲"), btn("mdi:stop", "stop_cover", "■"), btn("mdi:arrow-down", "close_cover", "▼")));
     return {
       el: el,
       update: function (hass) {
@@ -937,7 +949,8 @@
       if (!base) return;
       img.src = base.indexOf("data:") === 0 ? base : base + (base.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
     };
-    var timerId = this.timer(refresh, 15000);
+    // Standbilder alle 2 s neu laden: ein nahezu live wirkendes Bild ohne Videostream.
+    var timerId = this.timer(refresh, 2000);
     return {
       el: el,
       destroy: function () { clearInterval(timerId); },
