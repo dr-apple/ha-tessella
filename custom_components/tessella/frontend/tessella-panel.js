@@ -47,7 +47,7 @@
 
   var STATE_TEXT = { on: "An", off: "Aus", unavailable: "Nicht verfügbar", unknown: "Unbekannt" };
 
-  var ROW_H = 96;
+  var ROW_H = 80;
   var GAP = 10;
   var PAD = 12;
 
@@ -93,7 +93,7 @@
     ".tile.light .lbl { position: relative; padding: 12px; height: 100%; pointer-events: none; }",
     ".tile.light .pct { position: absolute; top: 10px; right: 12px; margin: 0; font-size: 1rem; font-weight: 700; }",
     ".tile.light .lbl { position: relative; padding: 10px 12px; height: 100%; box-sizing: border-box; }",
-    ".tile.light .lrow { position: relative; margin-top: 14px; pointer-events: auto; }",
+    ".tile.light .lrow { position: relative; margin-top: 8px; pointer-events: auto; }",
     ".tile.light .ltrack { pointer-events: auto; }",
     ".lbtn { -webkit-appearance: none; appearance: none; border: 0; border-radius: 10px; width: 34px; min-width: 34px; height: 32px; padding: 0; font-size: 1.1rem; background: rgba(0,0,0,.35); color: #fff; }",
     ".lrow { display: -webkit-box; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; }",
