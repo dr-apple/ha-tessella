@@ -94,8 +94,12 @@
     ".tile.light .pct { font-size: 1.6rem; font-weight: 700; margin-top: 20px; }",
     ".tile.light .lbl { position: relative; padding: 12px; height: 100%; }",
     ".tile.light .lrow { position: relative; margin-top: 10px; pointer-events: auto; }",
-    ".lbtn { -webkit-appearance: none; appearance: none; border: 0; border-radius: 10px; min-width: 48px; height: 40px; margin-right: 6px; font-size: 1.2rem; background: rgba(0,0,0,.35); color: #fff; }",
-    ".lbtn.wide { font-size: .9rem; }",
+    ".tile.light .ltrack { pointer-events: auto; }",
+    ".lbtn { -webkit-appearance: none; appearance: none; border: 0; border-radius: 10px; width: 34px; min-width: 34px; height: 40px; padding: 0; font-size: 1.1rem; background: rgba(0,0,0,.35); color: #fff; }",
+    ".lrow { display: -webkit-box; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; }",
+    ".ltrack { position: relative; -webkit-box-flex: 1; -webkit-flex: 1; flex: 1; min-width: 30px; height: 40px; margin: 0 4px; border-radius: 10px; background: rgba(0,0,0,.35); overflow: hidden; }",
+    ".lfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255,255,255,.4); }",
+    ".lknob { position: absolute; top: 4px; bottom: 4px; left: 0; width: 6px; margin-left: -3px; background: #fff; border-radius: 3px; }",
     ".tile.camera { padding: 0; }",
     ".tile.camera img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }",
     ".tile.camera .cam-lbl { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px; background: rgba(0,0,0,.45); color: #fff; font-size: .85rem; }",
@@ -772,9 +776,14 @@
     var bar = h("div", { "class": "bar" });
     var labelHead = headOf("");
     var pct = h("div", { "class": "pct" });
+    var fill = h("div", { "class": "lfill" });
+    var knob = h("div", { "class": "lknob" });
+    var track = h("div", { "class": "ltrack" }, fill, knob);
     var value = 0;
     var busyUntil = 0;
     var lastOn = 100;
+    var dragging = false;
+    var lastSend = 0;
 
     var curPct = function (st) {
       if (!st || st.state !== "on") return 0;
@@ -785,6 +794,13 @@
       value = p;
       bar.style.height = p + "%";
       pct.textContent = p + " %";
+      fill.style.width = p + "%";
+      knob.style.left = p + "%";
+    };
+    var sendLevel = function (p) {
+      if (!tile.entity) return;
+      if (p <= 0) self.call("light", "turn_off", { entity_id: tile.entity });
+      else self.call("light", "turn_on", { entity_id: tile.entity, brightness_pct: p });
     };
     var setLevel = function (p) {
       if (isEdit() || !tile.entity) return;
@@ -792,8 +808,16 @@
       busyUntil = Date.now() + 2000;
       show(p);
       if (p > 0) lastOn = p;
-      if (p <= 0) self.call("light", "turn_off", { entity_id: tile.entity });
-      else self.call("light", "turn_on", { entity_id: tile.entity, brightness_pct: p });
+      sendLevel(p);
+    };
+    var levelFromX = function (x) {
+      var rect = track.getBoundingClientRect();
+      if (!rect.width) return value;
+      return ((x - rect.left) / rect.width) * 100;
+    };
+    var xOf = function (e) {
+      var pt = e.changedTouches && e.changedTouches[0] ? e.changedTouches[0] : e;
+      return pt.clientX;
     };
     var stop = function (fn) {
       return function (e) {
@@ -801,11 +825,57 @@
         fn();
       };
     };
+
+    // Regler: Tippen setzt den Wert, Ziehen verändert ihn live
+    var onStart = function (e) {
+      if (isEdit() || !tile.entity) return;
+      dragging = true;
+      busyUntil = Date.now() + 2000;
+      if (e.stopPropagation) e.stopPropagation();
+      show(Math.max(0, Math.min(100, Math.round(levelFromX(xOf(e))))));
+    };
+    var onMove = function (e) {
+      if (!dragging) return;
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopPropagation) e.stopPropagation();
+      var p = Math.max(0, Math.min(100, Math.round(levelFromX(xOf(e)))));
+      show(p);
+      busyUntil = Date.now() + 2000;
+      var now = Date.now();
+      if (now - lastSend > 200) {
+        lastSend = now;
+        sendLevel(p);
+      }
+    };
+    var onEnd = function (e) {
+      if (!dragging) return;
+      dragging = false;
+      if (e && e.stopPropagation) e.stopPropagation();
+      if (value > 0) lastOn = value;
+      sendLevel(value);
+    };
+    track.addEventListener("touchstart", onStart, false);
+    track.addEventListener("touchmove", onMove, false);
+    track.addEventListener("touchend", onEnd, false);
+    track.addEventListener("touchcancel", onEnd, false);
+    track.addEventListener("mousedown", function (e) {
+      onStart(e);
+      var up = function (ev) {
+        window.removeEventListener("mousemove", onMove, false);
+        window.removeEventListener("mouseup", up, false);
+        onEnd(ev);
+      };
+      window.addEventListener("mousemove", onMove, false);
+      window.addEventListener("mouseup", up, false);
+    }, false);
+    track.addEventListener("click", function (e) {
+      if (e.stopPropagation) e.stopPropagation();
+    }, false);
+
     var minus = h("button", { "class": "lbtn", onclick: stop(function () { setLevel(value - 10); }) }, "−");
     var plus = h("button", { "class": "lbtn", onclick: stop(function () { setLevel(value + 10); }) }, "+");
-    var full = h("button", { "class": "lbtn wide", onclick: stop(function () { setLevel(100); }) }, "100 %");
 
-    // Tipp auf die Kachel (nicht auf die Tasten): an oder aus
+    // Tipp auf die Kachel selbst: an oder aus
     el.addEventListener("click", function () {
       if (isEdit() || !tile.entity) return;
       haptic();
@@ -821,7 +891,7 @@
     });
 
     el.appendChild(bar);
-    el.appendChild(h("div", { "class": "lbl" }, labelHead, pct, h("div", { "class": "lrow" }, minus, plus, full)));
+    el.appendChild(h("div", { "class": "lbl" }, labelHead, pct, h("div", { "class": "lrow" }, minus, track, plus)));
 
     return {
       el: el,
@@ -830,7 +900,7 @@
         replaceKids(labelHead, icon(tile.icon || DEFAULT_ICON.light), h("span", null, nameOf(st)));
         setClass(el, "on", !!st && st.state === "on");
         setClass(el, "unavail", !st || st.state === "unavailable");
-        if (Date.now() > busyUntil) {
+        if (Date.now() > busyUntil && !dragging) {
           var p = curPct(st);
           show(p);
           if (st && st.state === "on") lastOn = p || lastOn;
