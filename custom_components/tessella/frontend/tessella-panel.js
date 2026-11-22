@@ -143,7 +143,7 @@
     ".stepper button { width: 34px; height: 34px; font-size: 1.1rem; }",
     ".cover-row button { height: 34px; font-size: 1rem; }",
     ".tile.climate, .tile.cover { padding: 8px 10px; }",
-    ".tile.image { padding: 0; background: #1c1c1c; }",
+    ".tile.image { padding: 0; background: transparent; box-shadow: none; }",
     ".ibox { position: absolute; }",
     ".ibox img { position: absolute; top: 0; left: 0; display: block; }",
     ".omask { position: absolute; border-radius: 3px; }",
@@ -270,6 +270,18 @@
       n = n.parentNode || n.host;
     }
     return out;
+  }
+
+  // Zahlen passend zur Einheit runden (z. B. 14,508911 kWh -> 14,51 kWh)
+  function formatValue(txt, unit) {
+    var n = Number(txt);
+    if (txt !== "" && isFinite(n) && /^-?\d+(\.\d+)?$/.test(txt)) {
+      var dec = 1;
+      if (unit === "kWh" || unit === "V" || unit === "A") dec = 2;
+      else if (unit === "W" && Math.abs(n) >= 100) dec = 0;
+      txt = n.toFixed(dec).replace(".", ",");
+    }
+    return txt + (unit ? " " + unit : "");
   }
 
   function stateText(st) {
@@ -1168,9 +1180,7 @@
           if (!st || st.state === "unavailable" || st.state === "unknown") {
             v.el.textContent = "–";
           } else {
-            var txt = String(st.state);
-            if (/^-?\d+(\.\d+)?$/.test(txt)) txt = txt.replace(".", ",");
-            v.el.textContent = txt + (unit ? " " + unit : "");
+            v.el.textContent = formatValue(String(st.state), unit);
           }
         }
       }
