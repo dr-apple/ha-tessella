@@ -440,7 +440,11 @@
     onPtr(this.mainEl, "pointerup", function (e) { self.swipeEnd(e); });
     onPtr(this.mainEl, "pointercancel", function () { self.swipe = null; });
     this.sheetEl = h("div", { "class": "sheet" });
-    this.sheetBack = h("div", { "class": "sheet-back", hidden: true, onclick: function (e) { if (e.target === self.sheetBack) self.closeSheet(); } }, this.sheetEl);
+    this.sheetOpenedAt = 0;
+    this.sheetBack = h("div", { "class": "sheet-back", hidden: true, onclick: function (e) {
+      // Klick nach dem Loslassen eines langen Drucks ignorieren, sonst schließt die Übersicht sofort
+      if (e.target === self.sheetBack && Date.now() - self.sheetOpenedAt > 700) self.closeSheet();
+    } }, this.sheetEl);
     this.toastEl = h("div", { "class": "toast", hidden: true });
     this.app = h("div", { "class": "app" }, this.header, this.pagesEl, this.mainEl, this.sheetBack, this.toastEl);
     replaceKids(this.root, styleEl, this.app);
@@ -1848,6 +1852,7 @@
   // ---------- Sheets, Toast, Vollbild, Wachhalten ----------
 
   Tessella.prototype.openSheet = function (build) {
+    this.sheetOpenedAt = Date.now();
     replaceKids(this.sheetEl, build());
     this.sheetBack.hidden = false;
   };
