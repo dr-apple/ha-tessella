@@ -142,7 +142,8 @@
     ".cover-row button { height: 34px; font-size: 1rem; }",
     ".tile.climate, .tile.cover { padding: 8px 10px; }",
     ".climate-row > div { display: inline-block; vertical-align: middle; }",
-    ".climate-row .stepper { margin-top: 0; float: right; }",
+    ".climate-row .stepper { margin-top: 0; float: right; white-space: nowrap; }",
+    ".stepper div { display: inline-block; vertical-align: middle; margin: 0 4px; font-size: 1.1rem; font-weight: 700; }",
     ".tile.climate .tl-head { font-size: .8rem; }"
   ].join("\n");
 
