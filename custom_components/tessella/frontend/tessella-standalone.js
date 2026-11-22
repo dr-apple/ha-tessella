@@ -22,6 +22,15 @@
     statusEl.textContent = text || "";
   }
 
+  // Diagnose für ältere Geräte: Fehler direkt auf dem Bildschirm anzeigen.
+  window.onerror = function (msg, src, line) {
+    setStatus("Fehler: " + msg + " (" + (src || "").split("/").pop() + ":" + line + ")");
+  };
+  window.addEventListener("unhandledrejection", function (e) {
+    var r = e.reason;
+    setStatus("Fehler: " + ((r && r.message) || r));
+  });
+
   function getToken() {
     try {
       return localStorage.getItem(TOKEN_KEY) || "";
@@ -210,6 +219,7 @@
         hass.callService = function (domain, service, data) {
           return sock.send({ type: "call_service", domain: domain, service: service, service_data: data || {} });
         };
+        setStatus("Verbunden, lade Dashboard…");
         sock.send({ type: "auth/current_user" })
           .then(function (user) {
             hass.user = { is_admin: !!(user && user.is_admin), name: user && user.name };
@@ -221,6 +231,7 @@
               applyEntities(event);
               mountPanel();
               panel.hass = hass;
+              setStatus("");
             });
           })
           .catch(function (err) {
