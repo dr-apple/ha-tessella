@@ -1,0 +1,443 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:0;background:#111}#host{width:calc(100vw - 20px);max-width:900px;margin:10px auto}</style></head>
+<body><div id="host"></div>
+<script src="../../custom_components/tessella/frontend/tessella-panel.js"></script>
+<script>
+var states={
+ "sensor.helios_pv_gesamt_leistung":{state:"1440.2",attributes:{unit_of_measurement:"W"}},
+ "sensor.gesamte_eingangsleistung":{state:"1035.0",attributes:{unit_of_measurement:"W"}},
+ "sensor.haus_stromzaehler_einspeisung_leistung":{state:"-54.0",attributes:{unit_of_measurement:"W"}},
+ "sensor.haus_verbrauch":{state:"947.3",attributes:{unit_of_measurement:"W"}},
+ "sensor.batterie_leistung_invertiert":{state:"-111.0",attributes:{unit_of_measurement:"W"}},
+ "sensor.batteries_busspannung":{state:"766.8",attributes:{unit_of_measurement:"V"}},
+ "sensor.batteries_busstrom":{state:"0.3",attributes:{unit_of_measurement:"A"}},
+ "sensor.batteries_tagesladung":{state:"3.93",attributes:{unit_of_measurement:"kWh"}},
+ "sensor.batteries_tagesentladung":{state:"0.62",attributes:{unit_of_measurement:"kWh"}},
+ "sensor.batteries_batterieladung":{state:"38.0",attributes:{unit_of_measurement:"%"}}
+};
+var store={version:1,dashboards:{default:{title:"Energie",pages:[{id:"e",title:"Energie",columns:3,tiles:[
+ {id:"bild",type:"image",src:"../../custom_components/tessella/frontend/img/energie.png",name:"",icon:"",w:3,h:3,overlays:[
+ {
+  "kind": "mask",
+  "x": 37.876,
+  "y": 6.87,
+  "w": 20.708,
+  "h": 4.389,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 37.876,
+  "y": 11.26,
+  "w": 19.313,
+  "h": 2.672,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 31.652,
+  "y": 12.405,
+  "w": 2.468,
+  "h": 2.863,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 23.605,
+  "y": 18.13,
+  "w": 5.472,
+  "h": 3.626,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 33.691,
+  "y": 18.13,
+  "w": 5.472,
+  "h": 3.626,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 46.674,
+  "y": 18.13,
+  "w": 6.438,
+  "h": 3.626,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 56.76,
+  "y": 18.13,
+  "w": 6.545,
+  "h": 3.626,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 27.253,
+  "y": 24.332,
+  "w": 2.897,
+  "h": 2.195,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 27.146,
+  "y": 27.099,
+  "w": 4.292,
+  "h": 2.099,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 23.605,
+  "y": 27.195,
+  "w": 1.717,
+  "h": 2.004,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 37.124,
+  "y": 24.332,
+  "w": 2.843,
+  "h": 2.195,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 37.017,
+  "y": 27.099,
+  "w": 4.292,
+  "h": 2.099,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 33.53,
+  "y": 27.195,
+  "w": 1.717,
+  "h": 2.004,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 50.697,
+  "y": 24.332,
+  "w": 2.843,
+  "h": 2.195,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 50.697,
+  "y": 27.099,
+  "w": 4.131,
+  "h": 2.099,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 47.103,
+  "y": 27.195,
+  "w": 1.717,
+  "h": 2.004,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 60.891,
+  "y": 24.332,
+  "w": 2.843,
+  "h": 2.195,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 60.891,
+  "y": 27.099,
+  "w": 4.131,
+  "h": 2.099,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 57.296,
+  "y": 27.195,
+  "w": 1.717,
+  "h": 2.004,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 38.734,
+  "y": 32.443,
+  "w": 9.12,
+  "h": 4.58,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 39.431,
+  "y": 38.645,
+  "w": 1.341,
+  "h": 2.385,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 16.094,
+  "y": 52.958,
+  "w": 8.047,
+  "h": 4.008,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 15.665,
+  "y": 48.187,
+  "w": 3.38,
+  "h": 2.195,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 12.446,
+  "y": 59.16,
+  "w": 3.916,
+  "h": 8.206,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 2.414,
+  "y": 40.076,
+  "w": 8.584,
+  "h": 4.008,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 2.414,
+  "y": 64.695,
+  "w": 8.584,
+  "h": 3.626,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 5.15,
+  "y": 62.023,
+  "w": 1.609,
+  "h": 1.908,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 72.21,
+  "y": 52.958,
+  "w": 7.082,
+  "h": 4.294,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 40.773,
+  "y": 74.237,
+  "w": 4.936,
+  "h": 2.863,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 48.605,
+  "y": 72.805,
+  "w": 4.506,
+  "h": 5.439,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 27.897,
+  "y": 62.977,
+  "w": 10.3,
+  "h": 3.244,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 28.916,
+  "y": 82.252,
+  "w": 8.637,
+  "h": 3.817,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 28.916,
+  "y": 91.126,
+  "w": 8.637,
+  "h": 3.817,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 47.21,
+  "y": 81.87,
+  "w": 5.097,
+  "h": 2.481,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 47.21,
+  "y": 85.21,
+  "w": 5.901,
+  "h": 4.866,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 47.21,
+  "y": 90.649,
+  "w": 16.309,
+  "h": 7.252,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 79.721,
+  "y": 28.626,
+  "w": 14.217,
+  "h": 4.771,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 80.472,
+  "y": 36.546,
+  "w": 13.68,
+  "h": 2.767,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 79.185,
+  "y": 42.462,
+  "w": 9.871,
+  "h": 4.294,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 79.721,
+  "y": 72.042,
+  "w": 14.217,
+  "h": 4.771,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "mask",
+  "x": 79.775,
+  "y": 80.153,
+  "w": 14.217,
+  "h": 3.053,
+  "color": "#1c1c1c"
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.helios_pv_gesamt_leistung",
+  "x": 48.283,
+  "y": 9.16,
+  "unit": "W",
+  "size": 46
+ },
+ {
+  "kind": "text",
+  "x": 48.283,
+  "y": 12.5,
+  "text": "PV-Leistung jetzt",
+  "size": 20,
+  "color": "#f5a623"
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.gesamte_eingangsleistung",
+  "x": 43.24,
+  "y": 34.542,
+  "unit": "W",
+  "size": 34
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.haus_stromzaehler_einspeisung_leistung",
+  "x": 20.118,
+  "y": 54.962,
+  "unit": "W",
+  "size": 34
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.haus_verbrauch",
+  "x": 75.644,
+  "y": 54.962,
+  "unit": "W",
+  "size": 34
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.batterie_leistung_invertiert",
+  "x": 43.24,
+  "y": 75.477,
+  "unit": "W",
+  "size": 34
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.batteries_busspannung",
+  "x": 50.751,
+  "y": 74.046,
+  "unit": "V",
+  "size": 20
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.batteries_busstrom",
+  "x": 50.107,
+  "y": 77.099,
+  "unit": "A",
+  "size": 20
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.batteries_tagesladung",
+  "x": 33.262,
+  "y": 84.16,
+  "unit": "kWh",
+  "size": 28
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.batteries_tagesentladung",
+  "x": 33.262,
+  "y": 93.034,
+  "unit": "kWh",
+  "size": 28
+ },
+ {
+  "kind": "value",
+  "entity": "sensor.batteries_batterieladung",
+  "x": 50.054,
+  "y": 87.595,
+  "unit": "%",
+  "size": 46
+ }
+]}
+]}]}}};
+var hass={states:states,language:"de",user:{is_admin:true},
+ callWS:function(m){return Promise.resolve(JSON.parse(JSON.stringify(store)));},
+ callService:function(){return Promise.resolve();}};
+var core=new Tessella(document.getElementById("host"),{});
+core.connected(); core.setHass(hass);
+</script></body></html>

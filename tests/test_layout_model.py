@@ -120,5 +120,38 @@ class DashboardTests(unittest.TestCase):
             lm.normalize_data(_data([{"id": "a", "type": "clock", "w": True}]))
 
 
+class ImageTileTests(unittest.TestCase):
+    def test_image_tile_with_overlays(self):
+        out = lm.normalize_data(_data([{
+            "id": "bild", "type": "image", "src": "/tessella_static/img/energie.png", "w": 3, "h": 4,
+            "overlays": [
+                {"kind": "value", "entity": "sensor.helios_pv_gesamt_leistung", "x": 50, "y": 20, "unit": "W"},
+                {"kind": "mask", "x": 40, "y": 15, "w": 10, "h": 5, "color": "#1c1c1c"},
+                {"kind": "text", "x": 10, "y": 90, "text": "Hallo"},
+            ],
+        }]))
+        tile = out["dashboards"]["default"]["pages"][0]["tiles"][0]
+        self.assertEqual(len(tile["overlays"]), 3)
+
+    def test_image_src_must_be_local_or_https(self):
+        with self.assertRaises(lm.LayoutError):
+            lm.normalize_data(_data([{"id": "b", "type": "image", "src": "javascript:alert(1)"}]))
+
+    def test_overlay_position_range(self):
+        with self.assertRaises(lm.LayoutError):
+            lm.normalize_data(_data([{"id": "b", "type": "image", "src": "/tessella_static/x.png",
+                                      "overlays": [{"kind": "value", "entity": "sensor.a", "x": 120, "y": 1}]}]))
+
+    def test_overlay_color_checked(self):
+        with self.assertRaises(lm.LayoutError):
+            lm.normalize_data(_data([{"id": "b", "type": "image", "src": "/tessella_static/x.png",
+                                      "overlays": [{"kind": "mask", "x": 1, "y": 1, "w": 2, "h": 2, "color": "red;x"}]}]))
+
+    def test_value_overlay_needs_entity(self):
+        with self.assertRaises(lm.LayoutError):
+            lm.normalize_data(_data([{"id": "b", "type": "image", "src": "/tessella_static/x.png",
+                                      "overlays": [{"kind": "value", "x": 1, "y": 1}]}]))
+
+
 if __name__ == "__main__":
     unittest.main()

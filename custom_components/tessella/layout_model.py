@@ -25,6 +25,7 @@ TILE_TYPES = frozenset(
         "clock",    # Uhrzeit und Datum
         "text",     # frei eingegebener Text
         "web",      # eingebettete Webseite (iframe)
+        "image",    # Bild mit Werten an festen Positionen (z. B. Energiefluss)
     }
 )
 
@@ -41,6 +42,8 @@ _ENTITY_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 _SERVICE_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _ICON_RE = re.compile(r"^mdi:[a-z0-9-]{1,64}$")
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+MAX_OVERLAYS = 80
 
 
 class LayoutError(ValueError):
@@ -148,7 +151,59 @@ def _normalize_tile(raw: Any, page_columns: int, seen_ids: set[str]) -> dict[str
             raise LayoutError("url muss mit http:// oder https:// beginnen")
         tile["url"] = url
 
+    if tile_type == "image":
+        src = _str(raw.get("src"), "src", max_len=300, required=True)
+        if not (src.startswith("/tessella_static/") or src.startswith("https://")):
+            raise LayoutError("src muss /tessella_static/… oder https:// sein")
+        tile["src"] = src
+        tile["overlays"] = _normalize_overlays(raw.get("overlays", []))
+
     return tile
+
+
+def _pct(value: Any, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise LayoutError(f"{field} muss eine Zahl sein")
+    if not 0 <= value <= 100:
+        raise LayoutError(f"{field} muss zwischen 0 und 100 liegen")
+    return float(value)
+
+
+def _normalize_overlays(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        raise LayoutError("overlays muss eine Liste sein")
+    if len(raw) > MAX_OVERLAYS:
+        raise LayoutError(f"Zu viele Overlays (max. {MAX_OVERLAYS})")
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise LayoutError("Overlay muss ein Objekt sein")
+        kind = item.get("kind")
+        if kind not in ("value", "text", "mask"):
+            raise LayoutError(f"Unbekannter Overlay-Typ: {kind!r}")
+        entry: dict[str, Any] = {"kind": kind}
+        if kind == "mask":
+            entry.update({"x": _pct(item.get("x"), "x"), "y": _pct(item.get("y"), "y"),
+                          "w": _pct(item.get("w"), "w"), "h": _pct(item.get("h"), "h")})
+        else:
+            entry.update({"x": _pct(item.get("x"), "x"), "y": _pct(item.get("y"), "y")})
+            if kind == "value":
+                entity = _str(item.get("entity"), "entity", max_len=255, required=True)
+                if not _ENTITY_RE.match(entity):
+                    raise LayoutError(f"Ungültige Entität im Overlay: {entity!r}")
+                entry["entity"] = entity
+                entry["unit"] = _str(item.get("unit"), "unit", max_len=12)
+            else:
+                entry["text"] = _str(item.get("text"), "text", max_len=120, required=True)
+            size = _int(item.get("size"), "size", 6, 72, 14)
+            entry["size"] = size
+        color = item.get("color")
+        if color is not None and color != "":
+            if not isinstance(color, str) or not _COLOR_RE.match(color):
+                raise LayoutError(f"Ungültige Farbe: {color!r}")
+            entry["color"] = color
+        out.append(entry)
+    return out
 
 
 def _normalize_page(raw: Any, seen_page_ids: set[str], seen_tile_ids: set[str]) -> dict[str, Any]:

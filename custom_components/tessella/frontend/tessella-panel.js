@@ -23,9 +23,10 @@
     history: "Verlauf (24 h)",
     clock: "Uhr",
     text: "Text",
-    web: "Webseite"
+    web: "Webseite",
+    image: "Bild mit Werten"
   };
-  var TYPE_ORDER = ["toggle", "light", "sensor", "button", "climate", "cover", "camera", "history", "clock", "text", "web"];
+  var TYPE_ORDER = ["toggle", "light", "sensor", "button", "climate", "cover", "camera", "history", "clock", "text", "web", "image"];
 
   var NEEDS_ENTITY = ["toggle", "light", "sensor", "climate", "cover", "camera", "history"];
 
@@ -40,7 +41,8 @@
     history: "mdi:chart-line",
     clock: "mdi:clock-outline",
     text: "mdi:text",
-    web: "mdi:web"
+    web: "mdi:web",
+    image: "mdi:image"
   };
 
   var STATE_TEXT = { on: "An", off: "Aus", unavailable: "Nicht verfügbar", unknown: "Unbekannt" };
@@ -141,6 +143,11 @@
     ".stepper button { width: 34px; height: 34px; font-size: 1.1rem; }",
     ".cover-row button { height: 34px; font-size: 1rem; }",
     ".tile.climate, .tile.cover { padding: 8px 10px; }",
+    ".tile.image { padding: 0; background: #1c1c1c; }",
+    ".ibox { position: absolute; }",
+    ".ibox img { position: absolute; top: 0; left: 0; display: block; }",
+    ".omask { position: absolute; border-radius: 3px; }",
+    ".oval, .otext { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; font-weight: 600; line-height: 1; }",
     ".climate-row > div { display: inline-block; vertical-align: middle; }",
     ".climate-row .stepper { margin-top: 0; float: right; white-space: nowrap; }",
     ".stepper div { display: inline-block; vertical-align: middle; margin: 0 4px; font-size: 1.1rem; font-weight: 700; }",
@@ -595,7 +602,7 @@
       var made = this.makeTile(tile);
       this.tiles.push(made);
       nodes.push(made.el);
-      items.push({ el: made.el, w: Math.min(tile.w, cols), h: tile.h });
+      items.push({ el: made.el, w: Math.min(tile.w, cols), h: tile.h, fit: made.fit });
     }
     if (this.edit) {
       var addEl = h("button", { "class": "add-tile", "data-add": "1" }, icon("mdi:plus"));
@@ -615,7 +622,7 @@
 
   // Positioniert alle Kacheln in Pixeln passend zur aktuellen Breite
   Tessella.prototype.layout = function () {
-    if (!this.built || !this.layoutItems) return;
+    if (!this.built || !this.data || !this.layoutItems) return;
     var cols = this.cols();
     var width = this.gridEl.clientWidth || window.innerWidth || 320;
     var cell = (width - 2 * PAD - (cols - 1) * GAP) / cols;
@@ -627,6 +634,7 @@
       el.style.top = (PAD + p.r * (ROW_H + GAP)) + "px";
       el.style.width = (p.w * cell + (p.w - 1) * GAP) + "px";
       el.style.height = (p.h * ROW_H + (p.h - 1) * GAP) + "px";
+      if (this.layoutItems[i].fit) this.layoutItems[i].fit();
     }
     var rows = Math.max(pl.rows, 1);
     this.gridEl.style.height = (2 * PAD + rows * ROW_H + (rows - 1) * GAP) + "px";
@@ -702,6 +710,7 @@
       case "camera": return this.tileCamera(tile, el, stateOf, nameOf);
       case "history": return this.tileHistory(tile, el, headOf, stateOf, nameOf);
       case "clock": return this.tileClock(tile, el);
+      case "image": return this.tileImage(tile, el);
       case "text":
         el.appendChild(h("div", { "class": "tl-head" }, icon(tile.icon || DEFAULT_ICON.text), h("span", null, tile.name || "")));
         el.appendChild(h("div", { "class": "text-body" }, tile.text || ""));
@@ -1087,6 +1096,87 @@
     return { el: el, destroy: function () { clearInterval(timerId); }, update: function () {} };
   };
 
+  Tessella.prototype.tileImage = function (tile, el) {
+    var ratio = 1048 / 1864;
+    var box = h("div", { "class": "ibox" });
+    var img = h("img", { src: tile.src, alt: "" });
+    box.appendChild(img);
+    el.appendChild(box);
+    el.setAttribute("data-noswipe", "1");
+    setClass(el, "image", true);
+
+    var fontSpans = [];
+    var valueEls = [];
+    var overlays = tile.overlays || [];
+    for (var i = 0; i < overlays.length; i++) {
+      var o = overlays[i];
+      var node;
+      if (o.kind === "mask") {
+        node = h("div", { "class": "omask" });
+        node.style.left = o.x + "%";
+        node.style.top = o.y + "%";
+        node.style.width = o.w + "%";
+        node.style.height = o.h + "%";
+        node.style.background = o.color || "#1c1c1c";
+      } else if (o.kind === "text") {
+        node = h("span", { "class": "otext" }, o.text);
+        node.style.left = o.x + "%";
+        node.style.top = o.y + "%";
+        node.style.color = o.color || "#eee";
+        fontSpans.push({ el: node, size: o.size || 14 });
+      } else {
+        node = h("span", { "class": "oval" }, "–");
+        node.style.left = o.x + "%";
+        node.style.top = o.y + "%";
+        node.style.color = o.color || "#eee";
+        fontSpans.push({ el: node, size: o.size || 14 });
+        valueEls.push({ el: node, entity: o.entity, unit: o.unit || "" });
+      }
+      box.appendChild(node);
+    }
+
+    var fit = function () {
+      var W = el.clientWidth;
+      var H = el.clientHeight;
+      if (!W || !H) return;
+      var bw = Math.min(W, H / ratio);
+      var bh = bw * ratio;
+      box.style.width = bw + "px";
+      box.style.height = bh + "px";
+      box.style.left = ((W - bw) / 2) + "px";
+      box.style.top = ((H - bh) / 2) + "px";
+      img.style.width = "100%";
+      img.style.height = "100%";
+      var scale = bw / 1864;
+      for (var k = 0; k < fontSpans.length; k++) {
+        fontSpans[k].el.style.fontSize = Math.max(6, fontSpans[k].size * scale) + "px";
+      }
+    };
+    img.onload = function () {
+      if (img.naturalWidth) ratio = img.naturalHeight / img.naturalWidth;
+      fit();
+    };
+
+    return {
+      el: el,
+      fit: fit,
+      update: function (hass) {
+        for (var j = 0; j < valueEls.length; j++) {
+          var v = valueEls[j];
+          var st = hass.states[v.entity];
+          var unit = v.unit || (st && st.attributes && st.attributes.unit_of_measurement) || "";
+          if (!st || st.state === "unavailable" || st.state === "unknown") {
+            v.el.textContent = "–";
+          } else {
+            var txt = String(st.state);
+            if (/^-?\d+(\.\d+)?$/.test(txt)) txt = txt.replace(".", ",");
+            v.el.textContent = txt + (unit ? " " + unit : "");
+          }
+        }
+      }
+    };
+  };
+
   // ---------- Seitenwechsel per Wischen ----------
 
   Tessella.prototype.swipeStart = function (e) {
@@ -1181,6 +1271,17 @@
       for (var k in inputs) if (inputs.hasOwnProperty(k)) draft[k] = inputs[k].value;
       draft.w = Number(draft.w) || 1;
       draft.h = Number(draft.h) || 1;
+      if (draft.type === "image") {
+        var rawOv = String(draft.overlays != null && typeof draft.overlays === "string" ? draft.overlays : "").trim();
+        if (!rawOv) draft.overlays = [];
+        else {
+          try {
+            draft.overlays = JSON.parse(rawOv);
+          } catch (err2) {
+            throw new Error("Overlays sind kein gültiges JSON.");
+          }
+        }
+      }
       if (draft.type === "button") {
         var raw = String(draft.data != null ? draft.data : "").trim();
         if (!raw) draft.data = {};
@@ -1192,6 +1293,11 @@
           }
         }
       }
+    };
+
+    var overlaysText = function () {
+      if (typeof draft.overlays === "string") return draft.overlays;
+      return JSON.stringify(draft.overlays != null ? draft.overlays : [], null, 2);
     };
 
     var dataText = function () {
@@ -1237,6 +1343,10 @@
       }
       if (draft.type === "text") clean.text = draft.text || "";
       if (draft.type === "web") clean.url = draft.url || "";
+      if (draft.type === "image") {
+        clean.src = draft.src || "";
+        clean.overlays = draft.overlays || [];
+      }
       self.mutate(function (d) {
         var pg = d.dashboards[self.dashId].pages[self.pageIdx];
         var found = -1;
@@ -1269,6 +1379,10 @@
       }
       if (type === "text") nodes.push(field("Text", textarea("text", draft.text)));
       if (type === "web") nodes.push(field("Adresse", input("url", { type: "url", placeholder: "https://…" }), "Viele Seiten erlauben kein Einbetten (iframe)."));
+      if (type === "image") {
+        nodes.push(field("Bild-Adresse", input("src", { placeholder: "/tessella_static/img/energie.png" })));
+        nodes.push(field("Overlays (JSON)", textarea("overlays", overlaysText(), { placeholder: "[]" }), "Werte mit kind value und entity, Abdeckungen mit kind mask. x und y in Prozent des Bildes."));
+      }
       var widths = [];
       for (var i = 1; i <= cols; i++) widths.push([i, String(i)]);
       nodes.push(field("Breite (Spalten)", select("w", widths, draft.w || 1)));
