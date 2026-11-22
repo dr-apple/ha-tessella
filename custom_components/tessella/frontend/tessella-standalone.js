@@ -10,7 +10,7 @@
   var TOKEN_KEY = "tessella.token";
   var app = document.getElementById("app");
   var statusEl = document.getElementById("status");
-  var formEl = document.getElementById("form");
+  var formEl = document.getElementById("login");
   var inputEl = document.getElementById("token");
   var logoutBtn = document.getElementById("logout");
 
