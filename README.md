@@ -80,6 +80,16 @@ Aufbau:
 - `custom_components/tessella/layout_model.py`: Datenmodell und Validierung (ohne HA-Importe, testbar)
 - `custom_components/tessella/frontend/tessella-panel.js`: gesamtes Frontend als eine Datei, ohne Build-Schritt
 
+## Browser-Kompatibilität
+
+Tessella soll auch auf älteren iPads und Safari-Versionen laufen (ab iOS 12). Deshalb im Frontend beachten:
+
+- Keine Optional-Chaining-Syntax (`?.`) und keinen Nullish-Operator (`??`) schreiben, sonst lädt das Panel auf alten Browsern gar nicht.
+- Keine neuen DOM-APIs ohne Fallback. Stattdessen die Helfer `replaceKids`, `onPtr` und `mqListen` in `tessella-panel.js` nutzen.
+- Pointer-Ereignisse laufen auf älteren Geräten über Touch-Ereignisse (`onPtr`).
+
+Bekannte Einschränkungen auf iOS 12: Abstände zwischen Schaltflächen im Kopfbereich fehlen (flex `gap` ist dort nicht verfügbar), und das Ziehen am Licht scrollt die Seite eventuell mit.
+
 ## Ideen für später
 
 - Drag-and-drop-Raster statt Pfeiltasten zum Verschieben

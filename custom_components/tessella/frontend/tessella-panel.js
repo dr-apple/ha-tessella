@@ -37,7 +37,7 @@ const STATE_TEXT = { on: "An", off: "Aus", unavailable: "Nicht verfügbar", unkn
 
 const uid = (prefix = "k") => prefix + Math.random().toString(36).slice(2, 9);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const haptic = () => { try { navigator.vibrate?.(12); } catch (_) { /* ignorieren */ } };
+const haptic = () => { try { navigator.vibrate && navigator.vibrate(12); } catch (_) { /* ignorieren */ } };
 
 function h(tag, props, ...children) {
   const el = document.createElement(tag);
@@ -59,9 +59,50 @@ function h(tag, props, ...children) {
 
 const icon = (name, cls = "") => h("ha-icon", { icon: name, class: cls });
 
+// Kompatibilität mit älteren Safari-Versionen (iOS 12/13): replaceChildren, Pointer-Events
+// und addEventListener auf MediaQueryList fehlen dort.
+function replaceKids(el, ...nodes) {
+  while (el.firstChild) el.removeChild(el.firstChild);
+  for (const n of nodes.flat()) {
+    if (n === null || n === undefined || n === false) continue;
+    el.appendChild(n instanceof Node ? n : document.createTextNode(String(n)));
+  }
+}
+
+const HAS_POINTER = "PointerEvent" in window;
+const TOUCH_FOR = { pointerdown: "touchstart", pointermove: "touchmove", pointerup: "touchend", pointercancel: "touchcancel" };
+
+function onPtr(el, name, fn) {
+  if (HAS_POINTER) {
+    el.addEventListener(name, fn);
+    return;
+  }
+  el.addEventListener(
+    TOUCH_FOR[name],
+    (ev) => {
+      const t = ev.changedTouches && ev.changedTouches[0];
+      if (!t) return;
+      fn({
+        clientX: t.clientX,
+        clientY: t.clientY,
+        pointerId: 1,
+        target: ev.target,
+        preventDefault: () => ev.preventDefault(),
+        composedPath: () => (ev.composedPath ? ev.composedPath() : [ev.target]),
+      });
+    },
+    { passive: true }
+  );
+}
+
+function mqListen(mq, fn) {
+  if (mq.addEventListener) mq.addEventListener("change", fn);
+  else mq.addListener(fn);
+}
+
 function stateText(st) {
   if (!st) return "—";
-  return STATE_TEXT[st.state] ?? st.state;
+  return STATE_TEXT[st.state] != null ? STATE_TEXT[st.state] : st.state;
 }
 
 function numberOr(v, fallback) {
@@ -121,7 +162,7 @@ const STYLE = `
   .tile.light.dragging .bar { transition: none; }
   /* Kamera */
   .tile.camera { padding: 0; }
-  .tile.camera img { width: 100%; height: 100%; object-fit: cover; display: block; position: absolute; inset: 0; }
+  .tile.camera img { width: 100%; height: 100%; object-fit: cover; display: block; position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
   .tile.camera .cam-lbl { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px; background: rgba(0,0,0,.45); color: #fff; font-size: .85rem; }
   /* Thermostat */
   .climate-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; }
@@ -143,10 +184,10 @@ const STYLE = `
   .clock-time { font-size: 2.6rem; font-weight: 300; margin-top: auto; line-height: 1; font-variant-numeric: tabular-nums; }
   .clock-date { color: var(--secondary-text-color, #aaa); font-size: .9rem; margin-top: 4px; }
   .text-body { white-space: pre-wrap; margin-top: 6px; font-size: 1rem; }
-  .tile.web iframe { border: 0; width: 100%; height: 100%; position: absolute; inset: 0; }
+  .tile.web iframe { border: 0; width: 100%; height: 100%; position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
   .tile.web .tl-head { position: absolute; z-index: 1; left: 12px; top: 12px; background: var(--ha-card-background, #1e1e1e); border-radius: 8px; padding: 2px 6px; }
   /* Sheets */
-  .sheet-back { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
+  .sheet-back { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 20; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
   .sheet-back[hidden] { display: none; }
   .sheet { width: 100%; max-width: 640px; max-height: 92vh; overflow-y: auto; background: var(--ha-card-background, var(--card-background-color, #222));
            color: var(--primary-text-color, #eee); border-radius: 20px 20px 0 0; padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 20px);
@@ -190,7 +231,7 @@ class TessellaPanel extends HTMLElement {
     this._raf = 0;
     this._wakeLock = null;
     this._mq = window.matchMedia("(max-width: 520px)");
-    this._mq.addEventListener("change", () => this._renderPage());
+    mqListen(this._mq, () => this._renderPage());
     this._built = false;
     this._onVisible = () => {
       if (document.visibilityState === "visible" && this._wantWake()) this._setWake(true, true);
@@ -207,7 +248,7 @@ class TessellaPanel extends HTMLElement {
     document.removeEventListener("visibilitychange", this._onVisible);
     this._clearTiles();
     // Nur die Sperre freigeben; die gespeicherte Einstellung "wach halten" bleibt erhalten.
-    this._wakeLock?.release().catch(() => {});
+    if (this._wakeLock) this._wakeLock.release().catch(() => {});
     this._wakeLock = null;
   }
 
@@ -242,26 +283,29 @@ class TessellaPanel extends HTMLElement {
     this._header = h("header", null, this._titleEl, this._statusEl, this._wakeBtn, this._fsBtn, this._menuBtn, this._editBtn);
     this._pagesEl = h("nav", { class: "pages" });
     this._gridEl = h("div", { class: "grid" });
-    this._mainEl = h("main", { onpointerdown: (e) => this._swipeStart(e), onpointerup: (e) => this._swipeEnd(e), onpointercancel: () => (this._swipe = null) }, this._gridEl);
+    this._mainEl = h("main", null, this._gridEl);
+    onPtr(this._mainEl, "pointerdown", (e) => this._swipeStart(e));
+    onPtr(this._mainEl, "pointerup", (e) => this._swipeEnd(e));
+    onPtr(this._mainEl, "pointercancel", () => (this._swipe = null));
     this._gridEl.addEventListener("click", (e) => this._onGridClick(e));
     this._sheetBack = h("div", { class: "sheet-back", hidden: true, onclick: (e) => { if (e.target === this._sheetBack) this._closeSheet(); } });
     this._sheetEl = h("div", { class: "sheet" });
     this._sheetBack.append(this._sheetEl);
     this._toastEl = h("div", { class: "toast", hidden: true });
     this._app = h("div", { class: "app" }, this._header, this._pagesEl, this._mainEl, this._sheetBack, this._toastEl);
-    root.replaceChildren(this._styleEl, this._app);
+    replaceKids(root, this._styleEl, this._app);
     this._wantWakeFromStorage();
     this._setWakeButton();
   }
 
   _refreshAdminVisibility() {
     if (!this._app) return;
-    const isAdmin = !!this._hass?.user?.is_admin;
+    const isAdmin = !!(this._hass && this._hass.user && this._hass.user.is_admin);
     this._app.classList.toggle("readonly", !isAdmin);
     if (!isAdmin && this._edit) this._edit = false;
     this._app.classList.toggle("edit", this._edit);
     this._editBtn.classList.toggle("on", this._edit);
-    this._editBtn.replaceChildren(icon(this._edit ? "mdi:check" : "mdi:pencil"));
+    replaceKids(this._editBtn, icon(this._edit ? "mdi:check" : "mdi:pencil"));
   }
 
   // ---------- Laden und Speichern ----------
@@ -358,7 +402,7 @@ class TessellaPanel extends HTMLElement {
       h("button", { class: "pill" + (i === this._pageIdx ? " active" : ""), onclick: () => this._gotoPage(i) }, p.title)
     );
     if (this._edit) children.push(h("button", { class: "pill", onclick: () => this._addPage() }, "+ Seite"));
-    this._pagesEl.replaceChildren(...children);
+    replaceKids(this._pagesEl, ...children);
     this._pagesEl.hidden = pages.length <= 1 && !this._edit;
   }
 
@@ -387,12 +431,12 @@ class TessellaPanel extends HTMLElement {
     if (!page.tiles.length && !this._edit) {
       nodes.push(h("div", { class: "empty" }, "Noch keine Kacheln. Tippe oben auf das Zahnrad und dann auf Bearbeiten."));
     }
-    this._gridEl.replaceChildren(...nodes);
+    replaceKids(this._gridEl, ...nodes);
     this._updateTiles();
   }
 
   _clearTiles() {
-    for (const t of this._tiles) t.destroy?.();
+    for (const t of this._tiles) if (t.destroy) t.destroy();
     for (const id of this._timers.values()) clearInterval(id);
     this._timers.clear();
     this._tiles = [];
@@ -406,7 +450,7 @@ class TessellaPanel extends HTMLElement {
 
   _updateTiles() {
     if (!this._hass) return;
-    for (const t of this._tiles) t.update?.(this._hass);
+    for (const t of this._tiles) if (t.update) t.update(this._hass);
   }
 
   _onGridClick(e) {
@@ -436,7 +480,7 @@ class TessellaPanel extends HTMLElement {
     const callService = (domain, service, data) =>
       this._hass.callService(domain, service, data).catch((e) => this._toast("Fehler: " + (e.message || e)));
     const stateOf = (hass) => (tile.entity ? hass.states[tile.entity] : undefined);
-    const nameOf = (st) => tile.name || st?.attributes?.friendly_name || tile.entity || TYPES[tile.type];
+    const nameOf = (st) => tile.name || (st && st.attributes && st.attributes.friendly_name) || tile.entity || TYPES[tile.type];
 
     switch (tile.type) {
       case "toggle": {
@@ -454,7 +498,7 @@ class TessellaPanel extends HTMLElement {
             const st = stateOf(hass);
             head_.querySelector("span").textContent = nameOf(st);
             label.textContent = stateText(st);
-            el.classList.toggle("on", st?.state === "on");
+            el.classList.toggle("on", (st && st.state) === "on");
             el.classList.toggle("unavail", !st || st.state === "unavailable");
           },
         };
@@ -480,7 +524,7 @@ class TessellaPanel extends HTMLElement {
           pct.textContent = p + " %";
         };
         const canDim = (st) => st && st.attributes.brightness != null;
-        el.addEventListener("pointerdown", (e) => {
+        onPtr(el, "pointerdown", (e) => {
           if (isEdit() || !tile.entity) return;
           const st = stateOf(this._hass);
           try {
@@ -489,7 +533,7 @@ class TessellaPanel extends HTMLElement {
           startPct = curPct(st);
           drag = { id: e.pointerId, y0: e.clientY, t0: Date.now(), moved: false, pct: startPct, h: el.clientHeight || 1, canDim: canDim(st) };
         });
-        el.addEventListener("pointermove", (e) => {
+        onPtr(el, "pointermove", (e) => {
           if (!drag || drag.id !== e.pointerId || !drag.canDim) return;
           const dy = drag.y0 - e.clientY;
           if (!drag.moved && Math.abs(dy) < 8) return;
@@ -516,7 +560,7 @@ class TessellaPanel extends HTMLElement {
             callService("light", "turn_on", { entity_id: tile.entity, brightness_pct: d.pct });
           } else if (!d.moved && Date.now() - d.t0 < 450) {
             haptic();
-            if (st?.state === "on") {
+            if ((st && st.state) === "on") {
               lastOn = curPct(st) || lastOn;
               callService("light", "turn_off", { entity_id: tile.entity });
             } else {
@@ -524,19 +568,19 @@ class TessellaPanel extends HTMLElement {
             }
           }
         };
-        el.addEventListener("pointerup", (e) => end(e, false));
-        el.addEventListener("pointercancel", (e) => end(e, true));
+        onPtr(el, "pointerup", (e) => end(e, false));
+        onPtr(el, "pointercancel", (e) => end(e, true));
         return {
           el,
           update: (hass) => {
             const st = stateOf(hass);
-            headL.replaceChildren(icon(tile.icon || DEFAULT_ICON.light), h("span", null, nameOf(st)));
-            el.classList.toggle("on", st?.state === "on");
+            replaceKids(headL, icon(tile.icon || DEFAULT_ICON.light), h("span", null, nameOf(st)));
+            el.classList.toggle("on", (st && st.state) === "on");
             el.classList.toggle("unavail", !st || st.state === "unavailable");
             if (!drag || !drag.moved) {
               const p = curPct(st);
               setBar(p);
-              if (st?.state === "on") lastOn = p || lastOn;
+              if ((st && st.state) === "on") lastOn = p || lastOn;
             }
           },
         };
@@ -551,7 +595,7 @@ class TessellaPanel extends HTMLElement {
           update: (hass) => {
             const st = stateOf(hass);
             headS.querySelector("span").textContent = nameOf(st);
-            const unit = st?.attributes?.unit_of_measurement;
+            const unit = (st && st.attributes && st.attributes.unit_of_measurement);
             val.textContent = st ? `${st.state}${unit ? " " + unit : ""}` : "—";
             el.classList.toggle("unavail", !st || st.state === "unavailable");
           },
@@ -599,7 +643,7 @@ class TessellaPanel extends HTMLElement {
         const step = (dir, st) => {
           if (isEdit() || !st) return;
           const s = numberOr(st.attributes.target_temp_step, 0.5);
-          const base = pending ?? numberOr(st.attributes.temperature, 20);
+          const base = pending != null ? pending : numberOr(st.attributes.temperature, 20);
           pending = Math.round((base + dir * s) * 10) / 10;
           target.textContent = pending.toFixed(1) + "°";
           send(pending);
@@ -615,9 +659,9 @@ class TessellaPanel extends HTMLElement {
           update: (hass) => {
             const st = stateOf(hass);
             headC.querySelector("span") && (headC.querySelector("span").textContent = nameOf(st));
-            const unit = st?.attributes?.temperature_unit || "°";
-            cur.textContent = st?.attributes?.current_temperature != null ? `${st.attributes.current_temperature}${unit}` : stateText(st);
-            if (pending == null) target.textContent = st?.attributes?.temperature != null ? `${st.attributes.temperature}${unit}` : "—";
+            const unit = (st && st.attributes && st.attributes.temperature_unit) || "°";
+            cur.textContent = (st && st.attributes && st.attributes.current_temperature) != null ? `${st.attributes.current_temperature}${unit}` : stateText(st);
+            if (pending == null) target.textContent = (st && st.attributes && st.attributes.temperature) != null ? `${st.attributes.temperature}${unit}` : "—";
             minus.disabled = !st;
             plus.disabled = !st;
           },
@@ -640,7 +684,7 @@ class TessellaPanel extends HTMLElement {
           update: (hass) => {
             const st = stateOf(hass);
             headV.querySelector("span") && (headV.querySelector("span").textContent = nameOf(st));
-            const pos = st?.attributes?.current_position;
+            const pos = (st && st.attributes && st.attributes.current_position);
             val.textContent = pos != null ? `${stateText(st)} · ${pos} %` : stateText(st);
           },
         };
@@ -665,7 +709,7 @@ class TessellaPanel extends HTMLElement {
           update: (hass) => {
             const st = stateOf(hass);
             label.textContent = nameOf(st);
-            const pic = st?.attributes?.entity_picture;
+            const pic = (st && st.attributes && st.attributes.entity_picture);
             if (pic && pic !== base) {
               base = pic;
               refresh();
@@ -696,7 +740,7 @@ class TessellaPanel extends HTMLElement {
             const rows = (res && res[tile.entity]) || [];
             const pts = [];
             for (const r of rows) {
-              const v = parseFloat(r.state ?? r.s);
+              const v = parseFloat(r.state != null ? r.state : r.s);
               const t = r.lu ? r.lu * 1000 : Date.parse(r.last_updated || r.last_changed);
               if (Number.isFinite(v) && Number.isFinite(t)) pts.push([t, v]);
             }
@@ -727,7 +771,7 @@ class TessellaPanel extends HTMLElement {
           update: (hass) => {
             const st = stateOf(hass);
             headH.querySelector("span").textContent = nameOf(st);
-            const unit = st?.attributes?.unit_of_measurement;
+            const unit = (st && st.attributes && st.attributes.unit_of_measurement);
             val.textContent = st ? `${st.state}${unit ? " " + unit : ""}` : "—";
           },
         };
@@ -739,7 +783,7 @@ class TessellaPanel extends HTMLElement {
         el.append(h("div", { class: "tl-head" }, icon(tile.icon || DEFAULT_ICON.clock), h("span", null, tile.name || "Uhr")), time, date);
         const tick = () => {
           const now = new Date();
-          const loc = this._hass?.language || navigator.language || "de-DE";
+          const loc = (this._hass && this._hass.language) || navigator.language || "de-DE";
           time.textContent = new Intl.DateTimeFormat(loc, { hour: "2-digit", minute: "2-digit" }).format(now);
           date.textContent = new Intl.DateTimeFormat(loc, { weekday: "long", day: "numeric", month: "long" }).format(now);
         };
@@ -796,7 +840,7 @@ class TessellaPanel extends HTMLElement {
   // ---------- Bearbeiten ----------
 
   _toggleEdit() {
-    if (!this._hass?.user?.is_admin) return this._toast("Nur Administratoren können bearbeiten.");
+    if (!(this._hass && this._hass.user && this._hass.user.is_admin)) return this._toast("Nur Administratoren können bearbeiten.");
     this._edit = !this._edit;
     this._refreshAdminVisibility();
     this._renderAll();
@@ -826,7 +870,7 @@ class TessellaPanel extends HTMLElement {
     const field = (label, control, hint) =>
       h("div", { class: "row" }, h("label", null, label), control, hint ? h("div", { class: "hint" }, hint) : null);
     const input = (key, props = {}) => {
-      const el = h("input", { value: draft[key] ?? "", ...props });
+      const el = h("input", { value: draft[key] != null ? draft[key] : "", ...props });
       inputs[key] = el;
       return el;
     };
@@ -840,7 +884,7 @@ class TessellaPanel extends HTMLElement {
       return el;
     };
     const textarea = (key, value, props = {}) => {
-      const el = h("textarea", props, value ?? "");
+      const el = h("textarea", props, value != null ? value : "");
       inputs[key] = el;
       return el;
     };
@@ -851,7 +895,7 @@ class TessellaPanel extends HTMLElement {
       draft.w = Number(draft.w) || 1;
       draft.h = Number(draft.h) || 1;
       if (draft.type === "button") {
-        const raw = String(draft.data ?? "").trim();
+        const raw = String(draft.data != null ? draft.data : "").trim();
         if (!raw) draft.data = {};
         else {
           try {
@@ -863,7 +907,7 @@ class TessellaPanel extends HTMLElement {
       }
     };
 
-    const dataText = () => (typeof draft.data === "string" ? draft.data : JSON.stringify(draft.data ?? {}, null, 2));
+    const dataText = () => (typeof draft.data === "string" ? draft.data : JSON.stringify(draft.data != null ? draft.data : {}, null, 2));
 
     const build = () => {
       for (const k of Object.keys(inputs)) delete inputs[k];
@@ -978,10 +1022,10 @@ class TessellaPanel extends HTMLElement {
   }
 
   _entityDatalist() {
-    const states = this._hass?.states || {};
+    const states = (this._hass && this._hass.states) || {};
     const opts = Object.keys(states)
       .sort()
-      .map((id) => h("option", { value: id }, states[id]?.attributes?.friendly_name || ""));
+      .map((id) => h("option", { value: id }, (states[id] && states[id].attributes && states[id].attributes.friendly_name) || ""));
     return h("datalist", { id: "tessella-entities" }, opts);
   }
 
@@ -989,7 +1033,7 @@ class TessellaPanel extends HTMLElement {
 
   _openMenu() {
     if (!this._data) return;
-    const isAdmin = !!this._hass?.user?.is_admin;
+    const isAdmin = !!(this._hass && this._hass.user && this._hass.user.is_admin);
     const dashes = Object.entries(this._data.dashboards).map(([id, d]) =>
       h("button", {
         class: "btn list-item" + (id === this._dashId ? " current" : ""),
@@ -1104,7 +1148,7 @@ class TessellaPanel extends HTMLElement {
 
   _exportDashboard() {
     const text = JSON.stringify(this._dash(), null, 2);
-    const copy = navigator.clipboard?.writeText(text);
+    const copy = navigator.clipboard ? navigator.clipboard.writeText(text) : null;
     if (copy) copy.then(() => this._toast("In die Zwischenablage kopiert")).catch(() => this._showExport(text));
     else this._showExport(text);
   }
@@ -1138,13 +1182,13 @@ class TessellaPanel extends HTMLElement {
   // ---------- Sheets, Toast, Vollbild, Wachhalten ----------
 
   _openSheet(build) {
-    this._sheetEl.replaceChildren(...build());
+    replaceKids(this._sheetEl, ...build());
     this._sheetBack.hidden = false;
   }
 
   _closeSheet() {
     this._sheetBack.hidden = true;
-    this._sheetEl.replaceChildren();
+    replaceKids(this._sheetEl, );
   }
 
   _toast(text) {
@@ -1178,7 +1222,7 @@ class TessellaPanel extends HTMLElement {
         this._wakeLock = await navigator.wakeLock.request("screen");
         localStorage.setItem("tessella.wake", "1");
       } else {
-        await this._wakeLock?.release();
+        if (this._wakeLock) await this._wakeLock.release();
         this._wakeLock = null;
         localStorage.setItem("tessella.wake", "0");
       }
