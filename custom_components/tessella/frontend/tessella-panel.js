@@ -146,6 +146,10 @@
     ".toast[hidden] { display: none; }",
     ".readonly .edit-only { display: none; }",
     ".ico { display: inline-block; width: 0; }",
+    ".lgroup { margin-bottom: 12px; }",
+    ".lrow2 { padding: 8px 0; border-bottom: 1px solid rgba(128,128,128,.25); }",
+    ".lr-head { display: block; font-size: 1rem; margin-bottom: 6px; }",
+    ".lr-val { float: right; color: #aaa; font-size: .9rem; }",
     ".tile.on .tl-head { color: #fff; }",
     ".climate-row .big { font-size: 1.4rem; }",
     ".stepper button { width: 34px; height: 34px; font-size: 1.1rem; }",
@@ -678,6 +682,7 @@
 
   Tessella.prototype.updateTiles = function () {
     if (!this.hass) return;
+    if (this.sheetRefresh) this.sheetRefresh(this.hass);
     for (var i = 0; i < this.tiles.length; i++) {
       if (this.tiles[i].update) this.tiles[i].update(this.hass);
     }
@@ -877,6 +882,10 @@
 
     // Tipp auf die Kachel selbst: an oder aus
     el.addEventListener("click", function () {
+      if (longFired) {
+        longFired = false;
+        return;
+      }
       if (isEdit() || !tile.entity) return;
       haptic();
       var st = stateOf(self.hass);
@@ -889,6 +898,42 @@
         self.call("light", "turn_on", { entity_id: tile.entity });
       }
     });
+
+    // Langes Drücken auf die Kachel: Übersicht aller Lichter dieses Raums
+    var pressTimer = null;
+    var longFired = false;
+    var pressX = 0;
+    var pressY = 0;
+    var pointOf = function (e) {
+      return e.changedTouches && e.changedTouches[0] ? e.changedTouches[0] : e;
+    };
+    var pressStart = function (e) {
+      if (isEdit() || !tile.entity) return;
+      if (findUp(e.target, function (n) { return hasClass(n, "lrow"); })) return;
+      var pt = pointOf(e);
+      pressX = pt.clientX;
+      pressY = pt.clientY;
+      longFired = false;
+      clearTimeout(pressTimer);
+      pressTimer = setTimeout(function () {
+        longFired = true;
+        haptic();
+        self.openLightGroup(tile);
+      }, 600);
+    };
+    var pressMove = function (e) {
+      var pt = pointOf(e);
+      if (Math.abs(pt.clientX - pressX) > 10 || Math.abs(pt.clientY - pressY) > 10) clearTimeout(pressTimer);
+    };
+    var pressEnd = function () {
+      clearTimeout(pressTimer);
+    };
+    el.addEventListener("touchstart", pressStart, false);
+    el.addEventListener("touchmove", pressMove, false);
+    el.addEventListener("touchend", pressEnd, false);
+    el.addEventListener("touchcancel", pressEnd, false);
+    el.addEventListener("mousedown", pressStart, false);
+    el.addEventListener("mouseup", pressEnd, false);
 
     el.appendChild(bar);
     el.appendChild(h("div", { "class": "lbl" }, labelHead, pct, h("div", { "class": "lrow" }, minus, track, plus)));
@@ -907,6 +952,66 @@
         }
       }
     };
+  };
+
+  // Eine Zeile pro Licht in der Übersicht: Name, Wert, − und +
+  Tessella.prototype.lightRow = function (eid) {
+    var self = this;
+    var name = h("span", { "class": "lr-name" });
+    var val = h("span", { "class": "lr-val" });
+    var level = 0;
+    var setLevel = function (p) {
+      p = Math.max(0, Math.min(100, Math.round(p)));
+      level = p;
+      val.textContent = p > 0 ? p + " %" : "Aus";
+      if (p <= 0) self.call("light", "turn_off", { entity_id: eid });
+      else self.call("light", "turn_on", { entity_id: eid, brightness_pct: p });
+    };
+    var minus = h("button", { "class": "lbtn", onclick: function () { setLevel(level - 10); } }, "−");
+    var plus = h("button", { "class": "lbtn", onclick: function () { setLevel(level + 10); } }, "+");
+    var el = h("div", { "class": "lrow2" },
+      h("div", { "class": "lr-head" }, name, val),
+      h("div", { "class": "lrow" }, minus, plus));
+    return {
+      el: el,
+      update: function (hass) {
+        var st = hass.states[eid];
+        name.textContent = (st && st.attributes && st.attributes.friendly_name) || eid;
+        var on = !!st && st.state === "on";
+        var p = !on ? 0 : (st.attributes.brightness == null ? 100 : Math.round((st.attributes.brightness / 255) * 100));
+        level = p;
+        val.textContent = on ? p + " %" : "Aus";
+      }
+    };
+  };
+
+  Tessella.prototype.openLightGroup = function (tile) {
+    var self = this;
+    var ids = tile.group && tile.group.length ? tile.group : [tile.entity];
+    var rows = [];
+    for (var i = 0; i < ids.length; i++) rows.push(this.lightRow(ids[i]));
+    var all = function (on) {
+      for (var k = 0; k < ids.length; k++) {
+        if (on) self.call("light", "turn_on", { entity_id: ids[k] });
+        else self.call("light", "turn_off", { entity_id: ids[k] });
+      }
+    };
+    this.openSheet(function () {
+      var els = [];
+      for (var j = 0; j < rows.length; j++) els.push(rows[j].el);
+      return [
+        h("h2", null, (tile.name || "Lichter") + " – alle"),
+        h("div", { "class": "lgroup" }, els),
+        h("div", { "class": "btns" },
+          h("button", { "class": "btn primary", onclick: function () { all(true); } }, "Alle an"),
+          h("button", { "class": "btn", onclick: function () { all(false); } }, "Alle aus"),
+          h("button", { "class": "btn", onclick: function () { self.closeSheet(); } }, "Schließen"))
+      ];
+    });
+    this.sheetRefresh = function (hass) {
+      for (var j = 0; j < rows.length; j++) rows[j].update(hass);
+    };
+    if (this.hass) this.sheetRefresh(this.hass);
   };
 
   Tessella.prototype.tileSensor = function (tile, el, headOf, stateOf, nameOf) {
@@ -1686,6 +1791,7 @@
   };
 
   Tessella.prototype.closeSheet = function () {
+    this.sheetRefresh = null;
     this.sheetBack.hidden = true;
     replaceKids(this.sheetEl);
   };

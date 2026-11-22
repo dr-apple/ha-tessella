@@ -153,5 +153,15 @@ class ImageTileTests(unittest.TestCase):
                                       "overlays": [{"kind": "value", "x": 1, "y": 1}]}]))
 
 
+class LightGroupTests(unittest.TestCase):
+    def test_light_group_kept(self):
+        out = lm.normalize_data(_data([{"id": "l", "type": "light", "entity": "light.a_b", "group": ["light.a_b", "light.c_d"]}]))
+        self.assertEqual(out["dashboards"]["default"]["pages"][0]["tiles"][0]["group"], ["light.a_b", "light.c_d"])
+
+    def test_group_must_be_lights(self):
+        with self.assertRaises(lm.LayoutError):
+            lm.normalize_data(_data([{"id": "l", "type": "light", "entity": "light.a_b", "group": ["switch.x"]}]))
+
+
 if __name__ == "__main__":
     unittest.main()

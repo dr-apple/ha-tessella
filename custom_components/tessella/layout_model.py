@@ -151,6 +151,19 @@ def _normalize_tile(raw: Any, page_columns: int, seen_ids: set[str]) -> dict[str
             raise LayoutError("url muss mit http:// oder https:// beginnen")
         tile["url"] = url
 
+    if tile_type == "light":
+        group = raw.get("group", [])
+        if not isinstance(group, list) or len(group) > 20:
+            raise LayoutError("group muss eine Liste mit höchstens 20 Lichtern sein")
+        members = []
+        for ent in group:
+            if not isinstance(ent, str) or not _ENTITY_RE.match(ent) or not ent.startswith("light."):
+                raise LayoutError(f"Ungültiges Licht in group: {ent!r}")
+            if ent not in members:
+                members.append(ent)
+        if members:
+            tile["group"] = members
+
     if tile_type == "image":
         src = _str(raw.get("src"), "src", max_len=300, required=True)
         if not (src.startswith("/tessella_static/") or src.startswith("https://")):
