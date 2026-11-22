@@ -90,6 +90,14 @@ Tessella soll auch auf älteren iPads und Safari-Versionen laufen (ab iOS 12). D
 
 Bekannte Einschränkungen auf iOS 12: Abstände zwischen Schaltflächen im Kopfbereich fehlen (flex `gap` ist dort nicht verfügbar), und das Ziehen am Licht scrollt die Seite eventuell mit.
 
+## Eigenständige Seite (für ältere Geräte)
+
+Auf älteren Geräten lädt die Home-Assistant-Oberfläche nicht vollständig. Dafür gibt es eine eigene Seite ohne die HA-Oberfläche:
+
+`http://<HA-Adresse>:8123/tessella_static/standalone.html`
+
+Beim ersten Öffnen fragt sie nach einem **langlebigen Zugangstoken**. Den erstellst du in Home Assistant unter Profil → Sicherheit → Langlebige Zugangstoken. Der Token wird nur im Browser des Geräts gespeichert. Auf geteilten Geräten bitte „Abmelden“ benutzen.
+
 ## Ideen für später
 
 - Drag-and-drop-Raster statt Pfeiltasten zum Verschieben
