@@ -140,7 +140,10 @@
     ".climate-row .big { font-size: 1.4rem; }",
     ".stepper button { width: 34px; height: 34px; font-size: 1.1rem; }",
     ".cover-row button { height: 34px; font-size: 1rem; }",
-    ".tile.climate, .tile.cover { padding: 8px 10px; }"
+    ".tile.climate, .tile.cover { padding: 8px 10px; }",
+    ".climate-row > div { display: inline-block; vertical-align: middle; }",
+    ".climate-row .stepper { margin-top: 0; float: right; }",
+    ".tile.climate .tl-head { font-size: .8rem; }"
   ].join("\n");
 
   // ---------- Hilfsfunktionen ----------
